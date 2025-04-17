@@ -289,9 +289,9 @@ class AdvPromptGuardTrainer:
         
         # Final comprehensive evaluation
         self.logger.info("\nFinal Evaluation:")
-        benign_scores, benign_labels, _ = self.evaluate(test_dataset, batch_size, attack_steps=0)
-        train_attack_scores, train_attack_labels, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps)
-        strong_attack_scores, strong_attack_labels, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps*2)
+        benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=0)
+        train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps)
+        strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps*2)
         
         benign_auc = roc_auc_score(benign_labels, benign_scores)
         train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)

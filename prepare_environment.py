@@ -1,15 +1,44 @@
 # prepare_environment.py
 import os
 import subprocess
+import sys
 import requests
 import getpass
-import pyarrow.parquet as pq
 from tqdm import tqdm
-from huggingface_hub import login, whoami
+
+def install_packages():
+    """Install required Python packages with proper dependency order"""
+    packages = [
+        'pyarrow',  # Must be installed first
+        'torch',
+        'transformers',
+        'datasets',
+        'scikit-learn',
+        'seaborn',
+        'matplotlib',
+        'pandas',
+        'tqdm',
+        'requests',
+        'huggingface_hub',
+    ]
+    
+    print("Installing required packages...")
+    for package in packages:
+        try:
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+            print(f"Successfully installed {package}")
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to install {package}: {str(e)}")
+            if package == 'pyarrow':
+                print("\nCRITICAL ERROR: Failed to install pyarrow which is required for Parquet handling.")
+                print("Please try manually installing it with:")
+                print("pip install pyarrow")
+                sys.exit(1)
 
 def validate_parquet(file_path):
     """Verify if the file is a valid Parquet file"""
     try:
+        import pyarrow.parquet as pq
         pq.read_table(file_path)
         return True
     except Exception as e:
@@ -37,7 +66,6 @@ def download_file(url, filename, max_retries=3):
                     size = f.write(data)
                     bar.update(size)
             
-            # Verify the downloaded file
             if validate_parquet(filename):
                 return True
             else:
@@ -51,32 +79,10 @@ def download_file(url, filename, max_retries=3):
     
     return False
 
-def install_packages():
-    """Install required Python packages"""
-    packages = [
-        'torch',
-        'transformers',
-        'datasets',
-        'scikit-learn',
-        'seaborn',
-        'matplotlib',
-        'pandas',
-        'tqdm',
-        'requests',
-        'huggingface_hub',
-        'pyarrow',  # Required for Parquet validation
-    ]
-    
-    print("Installing required packages...")
-    for package in packages:
-        try:
-            subprocess.check_call(['pip', 'install', package])
-            print(f"Successfully installed {package}")
-        except subprocess.CalledProcessError:
-            print(f"Failed to install {package}")
-
 def hf_login():
     """Handle Hugging Face login with proper validation"""
+    from huggingface_hub import login, whoami  # Import here after installation
+    
     print("\n=== Hugging Face Login ===")
     print("You need a Hugging Face account with access to meta-llama/Prompt-Guard-86M")
     print("Get your token at: https://huggingface.co/settings/tokens\n")
@@ -104,10 +110,9 @@ def hf_login():
                 return False
 
 def main():
-    # Install required packages
     install_packages()
     
-    # Download dataset files with validation
+    # Download dataset files
     base_url = "https://www.oxen.ai/synapsecai/synthetic-prompt-injections/file/main/"
     files = {
         'train': 'synthetic-prompt-injections_train.parquet',

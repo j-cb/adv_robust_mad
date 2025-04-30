@@ -20,7 +20,7 @@ class SoftTokenAttack:
 
 class OneTokenBenignGradAttack(SoftTokenAttack):
     def __init__(self, model, tokenizer, device, attack_steps=20):
-        super().__init__(model, tokenizer, device)
+        super().__init__(self, model, tokenizer, device)
         self.attack_steps = attack_steps
 
     

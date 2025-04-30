@@ -17,7 +17,7 @@ from transformers import (
     AutoTokenizer,
 )
 
-from attacks import LocalL2
+from attacks import OneTokenLocalL2
 
 class AdvPromptGuardTrainer:
     def __init__(self, model, tokenizer, device='cpu', log_file='adv_prompt_guard.log'):
@@ -91,7 +91,7 @@ class AdvPromptGuardTrainer:
             if attack_steps > 0:
                 # Generate adversarial examples for positive samples
                 adv_emb, attention_mask = self.generate_adversarial_batch(
-                    batch_texts, batch_labels, LocalL2(self.model, self.tokenizer, self.device, attack_steps)
+                    batch_texts, batch_labels, OneTokenLocalL2(self.model, self.tokenizer, self.device, attack_steps)
                 )
                 # Directly use the adversarial embeddings
                 norm_emb = self.model.deberta.embeddings.LayerNorm(adv_emb)
@@ -173,7 +173,7 @@ class AdvPromptGuardTrainer:
                 # roughly 20% no attack, 20% full steps, rest in between.
                 num_steps = np.clip(np.random.randint(low=-attack_steps//3, high=attack_steps+attack_steps//3), 0, attack_steps)
             adv_emb, attention_mask = self.generate_adversarial_batch(
-                batch_texts, batch_labels, LocalL2(self.model, self.tokenizer, self.device, num_steps)
+                batch_texts, batch_labels, OneTokenLocalL2(self.model, self.tokenizer, self.device, num_steps)
             )
             
             # Forward pass with aligned labels

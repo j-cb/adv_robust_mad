@@ -18,16 +18,13 @@ class SoftTokenAttack:
     def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices):
         return NotImplementedError
 
-class OneTokenLocalL2(SoftTokenAttack):
-    def __init__(self, model, tokenizer, device, attack_steps=20, lr_l2=0.08, lr_linf=0.006, pen_l2=0.4, step_size_decay=0.94):
+class OneTokenBenignGradAttack(SoftTokenAttack):
+    def __init__(self, model, tokenizer, device, attack_steps=20):
         super().__init__(model, tokenizer, device)
-        self.lr_l2 = lr_l2
-        self.lr_linf = lr_linf
-        self.pen_l2 = pen_l2
-        self.step_size_decay = step_size_decay
         self.attack_steps = attack_steps
-            
-    def run_attack(self, raw_emb, attention_mask, token_positions, attacked_indices):
+
+    
+    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices):
         adv_emb = raw_emb.clone().detach().requires_grad_(True)
         for step in range(self.attack_steps):
             if adv_emb.grad is not None:
@@ -55,7 +52,17 @@ class OneTokenLocalL2(SoftTokenAttack):
             final_emb[attacked_indices[i], pos] = adv_emb[attacked_indices[i], pos].detach()
             
         return final_emb, attention_mask
-        
+    
+    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, attacked_indices, token_positions):
+        raise NotImplementedError
+    
+class OneTokenLocalL2(OneTokenBenignGradAttack):
+    def __init__(self, model, tokenizer, device, attack_steps=20, lr_l2=0.08, lr_linf=0.006, pen_l2=0.4, step_size_decay=0.94):
+        super().__init__(self, model, tokenizer, device, attack_steps=20)
+        self.lr_l2 = lr_l2
+        self.lr_linf = lr_linf
+        self.pen_l2 = pen_l2
+        self.step_size_decay = step_size_decay
     
     # One should be able to inherit form OneTokenLocalL2 and only change the following to modify the attack.
     def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, attacked_indices, token_positions):
@@ -71,9 +78,8 @@ class OneTokenLocalL2(SoftTokenAttack):
                 )
                 adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
         return adv_emb
-    
-    __call__ = run_attack
         
+
 
 class MultiStepAttackStrategy(SoftTokenAttack):
     def __init__(self, model, tokenizer, device):

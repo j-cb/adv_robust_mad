@@ -151,7 +151,7 @@ class AdvPromptGuardTrainer:
         seq_len = raw_emb.shape[1]
         token_positions = torch.randint(0, 10, (len(positive_class_indices),))
         
-        final_emb = attack(raw_emb, attention_mask, token_positions, positive_class_indices)
+        final_emb, attention_mask = attack(raw_emb, attention_mask, token_positions, positive_class_indices)
         
         return final_emb, attention_mask
     

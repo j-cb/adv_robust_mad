@@ -17,11 +17,18 @@ from transformers import (
     AutoTokenizer,
 )
 
+from attacks import LocalL2
+
 class AdvPromptGuardTrainer:
     def __init__(self, model, tokenizer, device='cpu', log_file='adv_prompt_guard.log'):
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
+        
+        # Input token embeddings should not be trained (especially when they define the threat model)
+        model.deberta.embeddings.requires_grad_(False)
+        
+        self.hard_tokens = self.model.deberta.embeddings.word_embeddings.weight
         
         # Configure logging
         logging.basicConfig(
@@ -38,6 +45,15 @@ class AdvPromptGuardTrainer:
         self.logger.info(f"Initializing AdvPromptGuardTrainer on device: {device}")
         self.logger.info(f"Model: {type(model).__name__}")
         self.logger.info(f"Tokenizer: {type(tokenizer).__name__}")
+        self.logger.info("Input token embedding layer frozen")
+        
+    def distance_to_closest_hard_token(self, emb):
+        # Returns closest embedding of an actual element of the tokenizer's vocabulary as well as the token's ID.
+        # Last input dimension should be embedding dim.
+        # All but the last dimension are preserved. E.g. (batch_size, sequence_length, emd_dim) -> (batch_size, sequence_length, emb_dim), LongTensor(batch_size, sequence_length)
+        # broadcasting (*, 1, emd_dim) - (vocab_size, emb_dim)
+        square_distances = ((emb.unsqueeze(-2) - self.hard_tokens)**2).sum(dim=-1)
+        return tuple(torch.min(square_distances, dim=-1))
         
     def _align_labels(self, labels):
         """Map dataset labels (0,1) to model labels (0,2)"""
@@ -75,10 +91,11 @@ class AdvPromptGuardTrainer:
             if attack_steps > 0:
                 # Generate adversarial examples for positive samples
                 adv_emb, attention_mask = self.generate_adversarial_batch(
-                    batch_texts, batch_labels, attack_steps
+                    batch_texts, batch_labels, LocalL2(self.model, self.tokenizer, self.device, attack_steps)
                 )
                 # Directly use the adversarial embeddings
-                outputs = self.model.deberta.encoder(adv_emb, attention_mask)[0]
+                norm_emb = self.model.deberta.embeddings.LayerNorm(adv_emb)
+                outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
                 logits = self.model.classifier(self.model.pooler(outputs))
                 probs = torch.softmax(logits, dim=-1)
                 batch_scores = probs[:, 2].detach().cpu().numpy()  # Jailbreak class score
@@ -97,7 +114,7 @@ class AdvPromptGuardTrainer:
                 batch_is_adv = [0] * len(batch_texts)
                 if save_embeddings:
                     with torch.no_grad():
-                        emb = self.model.deberta.embeddings(inputs['input_ids'])
+                        emb = self.model.deberta.embeddings.word_embeddings(inputs['input_ids'])
                     batch_emb = emb.detach().cpu().numpy()
                     all_embeddings.append(batch_emb)
             
@@ -109,7 +126,7 @@ class AdvPromptGuardTrainer:
             all_embeddings = np.concatenate(all_embeddings, axis=0)
         return np.array(scores), np.array(labels), np.array(is_adv), all_embeddings
     
-    def generate_adversarial_batch(self, texts, labels, attack_steps=20):
+    def generate_adversarial_batch(self, texts, labels, attack=None):
         """Generate adversarial examples by modifying one random token per positive input"""
         self.model.eval()
         
@@ -119,64 +136,22 @@ class AdvPromptGuardTrainer:
         attention_mask = inputs['attention_mask'].to(self.device)
         
         # Only attack positive examples
-        pos_indices = torch.where(torch.tensor(labels) == 2)[0]
-        if len(pos_indices) == 0:
+        positive_class_indices = torch.where(torch.tensor(labels) == 2)[0]
+        if len(positive_class_indices) == 0:
             # Return original embeddings if no positives in batch
             with torch.no_grad():
-                orig_emb = self.model.deberta.embeddings(input_ids)
-            return orig_emb, attention_mask
+                raw_emb = self.model.deberta.embeddings.word_embeddings(input_ids)
+            return raw_emb, attention_mask
         
         # Get embeddings for all examples
         with torch.no_grad():
-            orig_emb = self.model.deberta.embeddings(input_ids)
-        
-        # Initialize adversarial embeddings (only for positive examples)
-        adv_emb = orig_emb.clone().detach().requires_grad_(True)
-        emb_range = orig_emb.max() - orig_emb.min()
-        
-        # Attack parameters
-        lr_l2 = 0.08
-        lr_linf = 0.006
-        pen_l2 = 0.4
-        lr_decay = 0.94
+            raw_emb = self.model.deberta.embeddings.word_embeddings(input_ids)
         
         # Select one random token position to modify per example
-        seq_len = orig_emb.shape[1]
-        token_positions = torch.randint(0, 10, (len(pos_indices),))
+        seq_len = raw_emb.shape[1]
+        token_positions = torch.randint(0, 10, (len(positive_class_indices),))
         
-        for step in range(attack_steps):
-            if adv_emb.grad is not None:
-                adv_emb.grad.zero_()
-            
-            # Forward pass only on modified tokens
-            modified_emb = orig_emb.clone()
-            for i, pos in enumerate(token_positions):
-                modified_emb[pos_indices[i], pos] = adv_emb[pos_indices[i], pos]
-            
-            outputs = self.model.deberta.encoder(modified_emb, attention_mask)[0]
-            logits = self.model.classifier(self.model.pooler(outputs))
-            probs = torch.softmax(logits, dim=-1)
-            
-            # Maximize benign class (0) probability for jailbreak examples
-            loss = -torch.log(probs[pos_indices, 0]).mean()
-            loss.backward()
-            
-            # Update only the selected token positions
-            with torch.no_grad():
-                for i, pos in enumerate(token_positions):
-                    idx = pos_indices[i]
-                    grad = adv_emb.grad[idx, pos]
-                    perturbation = (
-                        -grad * (lr_l2 * emb_range / (grad.abs().max() + 1e-8))  # L2
-                        -grad.sign() * lr_linf * emb_range * probs[idx, 2].item()  # Linf
-                        -((adv_emb[idx, pos] - orig_emb[idx, pos])/emb_range * pen_l2 * probs[idx, 0].item())  # L2 penalty
-                    )
-                    adv_emb[idx, pos] += (lr_decay**step) * perturbation
-
-        # Create final embeddings with adversarial modifications
-        final_emb = orig_emb.clone()
-        for i, pos in enumerate(token_positions):
-            final_emb[pos_indices[i], pos] = adv_emb[pos_indices[i], pos].detach()
+        final_emb = attack(raw_emb, token_positions, positive_class_indices)
         
         return final_emb, attention_mask
     
@@ -198,7 +173,7 @@ class AdvPromptGuardTrainer:
                 # roughly 20% no attack, 20% full steps, rest in between.
                 num_steps = np.clip(np.random.randint(low=-attack_steps//3, high=attack_steps+attack_steps//3), 0, attack_steps)
             adv_emb, attention_mask = self.generate_adversarial_batch(
-                batch_texts, batch_labels, num_steps
+                batch_texts, batch_labels, LocalL2(self.model, self.tokenizer, self.device, num_steps)
             )
             
             # Forward pass with aligned labels
@@ -340,6 +315,6 @@ if __name__ == "__main__":
     trainer = AdvPromptGuardTrainer(model, tokenizer, device, log_file=log_file)
     metrics = trainer.adversarial_train(train_dataset, test_dataset, epochs=10, batch_size=16)
     
-    from save_utils import save_model_and_data, upload_to_hf_hub
+    from saving_utils import save_model_and_data, upload_to_hf_hub
     save_model_and_data(trainer, test_dataset, attack_steps=20)
     upload_to_hf_hub("your-username/your-model-name", "your-hf-token")

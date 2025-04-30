@@ -1,0 +1,102 @@
+import torch
+
+class SoftTokenAttack:
+    def __init__(self, model, tokenizer, device):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+        # adjust this if not using prompt-guard or other deberta model  
+        self.hard_tokens = model.deberta.embeddings.word_embeddings.weight
+        self.ites_diameter = self.hard_tokens.max() - self.hard_tokens.min()
+        
+    def compute_perturbation(self, grad, probs, step):
+        raise NotImplementedError
+        
+    def apply_projection(self, adv_emb, raw_emb, pos_indices, token_positions, step):
+        return adv_emb
+
+class OneTokenLocalL2(SoftTokenAttack):
+    def __init__(self, model, tokenizer, device, attack_steps=20, lr_l2=0.08, lr_linf=0.006, pen_l2=0.4, step_size_decay=0.94):
+        super().__init__(model, tokenizer, device)
+        self.lr_l2 = lr_l2
+        self.lr_linf = lr_linf
+        self.pen_l2 = pen_l2
+        self.step_size_decay = step_size_decay
+        self.attack_steps = attack_steps
+    
+        
+    def run_attack(self, raw_emb, attention_mask, token_positions, attacked_indices):
+        adv_emb = raw_emb.clone().detach().requires_grad_(True)
+        for step in range(self.attack_steps):
+            if adv_emb.grad is not None:
+                adv_emb.grad.zero_()
+            
+            # Forward pass still on all samples
+            modified_emb = raw_emb.clone()
+            for i, position in enumerate(token_positions):
+                modified_emb[attacked_indices[i], position] = adv_emb[attacked_indices[i], position]
+            
+            norm_emb = self.model.deberta.embeddings.LayerNorm(modified_emb)
+            outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
+            logits = self.model.classifier(self.model.pooler(outputs))
+            probs = torch.softmax(logits, dim=-1)
+            
+            # Maximize benign class (0) probability for jailbreak examples
+            loss = -torch.log(probs[attacked_indices, 0]).mean()
+            loss.backward()
+            
+            adv_emb = self.compute_perturbation(adv_emb, raw_emb, loss, probs, step, attacked_indices, token_positions)
+            
+        # Create final embeddings with adversarial modifications
+        final_emb = raw_emb.clone()
+        for i, pos in enumerate(token_positions):
+            final_emb[attacked_indices[i], pos] = adv_emb[attacked_indices[i], pos].detach()
+            
+        return final_emb, attention_mask
+        
+    
+    # One should be able to inherit form OneTokenLocalL2 and only change the following to modify the attack.
+    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, attacked_indices, token_positions):
+        assert adv_emb.grad is not None
+        with torch.no_grad():
+            for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
+                idx = attacked_indices[i]
+                grad = adv_emb.grad[idx, pos]
+                perturbation = (
+                    -grad * (self.lr_l2 * self.ites_diameter / (grad.abs().max() + 1e-8))  # L2++
+                    -grad.sign() * self.lr_linf * self.ites_diameter * probs[idx, 2].item()  # Linf
+                    -((adv_emb[idx, pos] - raw_emb[idx, pos])/self.ites_diameter * self.pen_l2 * probs[idx, 0].item())  # L2 penalty
+                )
+                adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
+        return adv_emb
+        
+
+class MultiStepAttackStrategy(SoftTokenAttack):
+    def __init__(self, model, tokenizer, device):
+        super().__init__(model, tokenizer, device)
+        self.R = self._compute_radius()
+        
+    def _compute_radius(self):
+        pairwise_dist = torch.cdist(self.hard_tokens, self.hard_tokens, p=2)
+        return pairwise_dist.max() / 1.9
+        
+    def compute_perturbation(self, grad, probs, step):
+        if step < 8:
+            return 0.1 * grad + 0.01 * grad.sign()
+        elif step < 16:
+            return 0.1 * grad + 0.01 * grad.sign() - 0.05 * (self.current_emb - self.raw_emb)
+        else:
+            return 0.1 * grad
+        
+    def apply_projection(self, adv_emb, raw_emb, pos_indices, token_positions, step):
+        if step >= 8:
+            with torch.no_grad():
+                for i, pos in enumerate(token_positions):
+                    idx = pos_indices[i]
+                    current_emb = adv_emb[idx, pos]
+                    dists = torch.norm(current_emb - self.hard_tokens, dim=1)
+                    v0 = torch.argmin(dists)
+                    if dists[v0] > self.R:
+                        direction = self.hard_tokens[v0] - current_emb
+                        adv_emb[idx, pos] += direction * (dists[v0] - self.R)/dists[v0]
+        return adv_emb

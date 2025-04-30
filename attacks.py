@@ -19,14 +19,13 @@ class SoftTokenAttack:
         return NotImplementedError
 
 class OneTokenBenignGradAttack(SoftTokenAttack):
-    def __init__(self, model, tokenizer, device, attack_steps=20):
-        super().__init__(self, model, tokenizer, device)
-        self.attack_steps = attack_steps
+    def __init__(self, model, tokenizer, device, **kwargs):
+        super().__init__(model, tokenizer, device)      
 
     
-    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices):
+    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices, attack_steps):
         adv_emb = raw_emb.clone().detach().requires_grad_(True)
-        for step in range(self.attack_steps):
+        for step in range(attack_steps):
             if adv_emb.grad is not None:
                 adv_emb.grad.zero_()
             
@@ -44,7 +43,7 @@ class OneTokenBenignGradAttack(SoftTokenAttack):
             loss = -torch.log(probs[attacked_indices, 0]).mean()
             loss.backward()
             
-            adv_emb = self.compute_perturbation(adv_emb, raw_emb, loss, probs, step, attacked_indices, token_positions)
+            adv_emb = self.compute_perturbation(adv_emb, raw_emb, loss, probs, step, attack_steps, attacked_indices, token_positions)
             
         # Create final embeddings with adversarial modifications
         final_emb = raw_emb.clone()
@@ -53,19 +52,20 @@ class OneTokenBenignGradAttack(SoftTokenAttack):
             
         return final_emb, attention_mask
     
-    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, attacked_indices, token_positions):
+    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, total_steps, attacked_indices, token_positions):
         raise NotImplementedError
     
 class OneTokenLocalL2(OneTokenBenignGradAttack):
-    def __init__(self, model, tokenizer, device, attack_steps=20, lr_l2=0.08, lr_linf=0.006, pen_l2=0.4, step_size_decay=0.94):
-        super().__init__(self, model, tokenizer, device, attack_steps=20)
+    def __init__(self, model, tokenizer, device, lr_l2=0.08, lr_linf=0.006, pen_l2=0.4, step_size_decay=0.94, **kwargs):
+        super().__init__(model, tokenizer, device)
+        
         self.lr_l2 = lr_l2
         self.lr_linf = lr_linf
         self.pen_l2 = pen_l2
         self.step_size_decay = step_size_decay
     
     # One should be able to inherit form OneTokenLocalL2 and only change the following to modify the attack.
-    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, attacked_indices, token_positions):
+    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, total_steps, attacked_indices, token_positions):
         assert adv_emb.grad is not None
         with torch.no_grad():
             for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
@@ -79,10 +79,46 @@ class OneTokenLocalL2(OneTokenBenignGradAttack):
                 adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
         return adv_emb
         
+    
+class OneTokenGlobalL2(OneTokenBenignGradAttack):
+    def __init__(self, model, tokenizer, device, lr_l2=0.08, lr_linf=0.006, pen_l2=0.4, step_size_decay=0.94, radius_overlap=1.1, **kwargs):
+        super().__init__(self, model, tokenizer, device)
+        
+        self.lr_l2 = lr_l2
+        self.lr_linf = lr_linf
+        self.pen_l2 = pen_l2
+        self.step_size_decay = step_size_decay
+        self.radius_overlap = radius_overlap
+        
+        self.R = self.compute_radius()
+        
+    def compute_radius(self):
+        pairwise_dist = torch.cdist(self.hard_tokens, self.hard_tokens, p=2)
+        return pairwise_dist.max() * self.radius_overlap / 2
+    
+    # One should be able to inherit form OneTokenLocalL2 and only change the following to modify the attack.
+    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, total_steps, attacked_indices, token_positions):
+        assert adv_emb.grad is not None
+        with torch.no_grad():
+            if step < total_steps: #//3:
+                for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
+                    idx = attacked_indices[i]
+                    grad = adv_emb.grad[idx, pos]
+                    perturbation = (
+                        -grad * (self.lr_l2 * self.ites_diameter / (grad.abs().max() + 1e-8))  # L2++
+                        -grad.sign() * self.lr_linf * self.ites_diameter * probs[idx, 2].item()  # Linf
+                    )
+                    adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
+                    dists = torch.norm(adv_emb[idx, pos] - self.hard_tokens, dim=1)
+                    v0 = torch.argmin(dists)
+                    if dists[v0] > self.R:
+                        direction = self.hard_tokens[v0] - adv_emb[idx, pos]
+                        adv_emb[idx, pos] += direction * (dists[v0] - self.R)
+        return adv_emb
 
 
 class MultiStepAttackStrategy(SoftTokenAttack):
-    def __init__(self, model, tokenizer, device):
+    def __init__(self, model, tokenizer, device, **kwargs):
         super().__init__(model, tokenizer, device)
         self.R = self._compute_radius()
         

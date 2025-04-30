@@ -6,6 +6,8 @@ import seaborn as sns
 import time
 import torch
 import numpy as np
+import yaml
+import importlib
 
 from datasets import load_dataset
 from sklearn.metrics import auc, roc_curve, roc_auc_score
@@ -20,10 +22,11 @@ from transformers import (
 from attacks import OneTokenLocalL2
 
 class AdvPromptGuardTrainer:
-    def __init__(self, model, tokenizer, device='cpu', log_file='adv_prompt_guard.log'):
+    def __init__(self, model, tokenizer, device='cpu', attack=None, log_file='adv_prompt_guard.log'):
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
+        self.attack = attack
         
         # Input token embeddings should not be trained (especially when they define the threat model)
         model.deberta.embeddings.requires_grad_(False)
@@ -59,7 +62,7 @@ class AdvPromptGuardTrainer:
         """Map dataset labels (0,1) to model labels (0,2)"""
         return torch.tensor([0 if x == 0 else 2 for x in labels], device=self.device)
         
-    def evaluate(self, dataset, batch_size=16, attack_steps=0, save_embeddings=False):
+    def evaluate(self, dataset, batch_size=16, attack=None, attack_steps=0, save_embeddings=False):
         """Evaluate model on dataset with optional adversarial attacks
         
         Args:
@@ -91,8 +94,7 @@ class AdvPromptGuardTrainer:
             if attack_steps > 0:
                 # Generate adversarial examples for positive samples
                 adv_emb, attention_mask = self.generate_adversarial_batch(
-                    batch_texts, batch_labels, OneTokenLocalL2(self.model, self.tokenizer, self.device, attack_steps)
-                )
+                    batch_texts, batch_labels, attack, attack_steps)
                 # Directly use the adversarial embeddings
                 norm_emb = self.model.deberta.embeddings.LayerNorm(adv_emb)
                 outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
@@ -126,7 +128,7 @@ class AdvPromptGuardTrainer:
             all_embeddings = np.concatenate(all_embeddings, axis=0)
         return np.array(scores), np.array(labels), np.array(is_adv), all_embeddings
     
-    def generate_adversarial_batch(self, texts, labels, attack=None):
+    def generate_adversarial_batch(self, texts, labels, attack=None, attack_steps=20):
         """Generate adversarial examples by modifying one random token per positive input"""
         self.model.eval()
         
@@ -151,7 +153,7 @@ class AdvPromptGuardTrainer:
         seq_len = raw_emb.shape[1]
         token_positions = torch.randint(0, 10, (len(positive_class_indices),))
         
-        final_emb, attention_mask = attack(raw_emb, attention_mask, token_positions, positive_class_indices)
+        final_emb, attention_mask = attack(raw_emb, attention_mask, token_positions, positive_class_indices, attack_steps)
         
         return final_emb, attention_mask
     
@@ -173,7 +175,7 @@ class AdvPromptGuardTrainer:
                 # roughly 20% no attack, 20% full steps, rest in between.
                 num_steps = np.clip(np.random.randint(low=-attack_steps//3, high=attack_steps+attack_steps//3), 0, attack_steps)
             adv_emb, attention_mask = self.generate_adversarial_batch(
-                batch_texts, batch_labels, OneTokenLocalL2(self.model, self.tokenizer, self.device, num_steps)
+                batch_texts, batch_labels, self.attack, num_steps
             )
             
             # Forward pass with aligned labels
@@ -213,9 +215,9 @@ class AdvPromptGuardTrainer:
         self.logger.info("\nInitial Evaluation:")
         
         # Evaluate on different conditions
-        benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=0)
-        train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps)
-        strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps*2)
+        benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+        train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+        strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
         
         benign_auc = roc_auc_score(benign_labels, benign_scores)
         train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)
@@ -242,9 +244,9 @@ class AdvPromptGuardTrainer:
             self.logger.info(f"Train Loss: {train_loss:.4f}")
             
             # Evaluate on different conditions
-            benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=0)
-            train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps)
-            strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps*2)
+            benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+            train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+            strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
             
             benign_auc = roc_auc_score(benign_labels, benign_scores)
             train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)
@@ -264,9 +266,9 @@ class AdvPromptGuardTrainer:
         
         # Final comprehensive evaluation
         self.logger.info("\nFinal Evaluation:")
-        benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=0)
-        train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps)
-        strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, attack_steps=attack_steps*2)
+        benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+        train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+        strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
         
         benign_auc = roc_auc_score(benign_labels, benign_scores)
         train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)
@@ -286,7 +288,13 @@ class AdvPromptGuardTrainer:
         return metrics_history
 
 if __name__ == "__main__":
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    # Load config
+    with open("config.yaml") as f:
+        config = yaml.safe_load(f)
+
+    # Configure device with fallback
+    device = config['model'].get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
     
     # Configure timestamp for log file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -294,27 +302,63 @@ if __name__ == "__main__":
     
     # Load model and tokenizer
     prompt_injection_model_name = 'meta-llama/Prompt-Guard-86M'
-    tokenizer = AutoTokenizer.from_pretrained(prompt_injection_model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(prompt_injection_model_name).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(config['model']['name'])
+    model = AutoModelForSequenceClassification.from_pretrained(config['model']['name']).to(device)
     
     # Load and preprocess datasets with correct label mapping
     dataset = load_dataset("parquet", data_files={
-        'train': 'synthetic-prompt-injections_train.parquet', 
-        'test': 'synthetic-prompt-injections_test.parquet'
+        'train': config['datasets']['train_path'],
+        'test': config['datasets']['test_path']
     })
     
-    # Convert dataset labels: 0 remains 0 (benign), 1 becomes 2 (jailbreak)
+    # Dataset sampling
+    train_range = config['datasets']['sample_size']['train']
+    test_range = config['datasets']['sample_size']['test']
+    
+    train_dataset = dataset['train']
+    test_dataset = dataset['test']
+    if train_range is not None:
+        train_dataset = train_dataset.select(range(train_range))
+    if test_range is not None:
+        test_dataset = test_dataset.select(range(test_range))
+    
+    # Map labels
     def map_labels(example):
         example['label'] = 0 if int(example['label']) == 0 else 2
         return example
     
-    train_dataset = dataset['train'].select(range(10000)).map(map_labels)
-    test_dataset = dataset['test'].select(range(100)).map(map_labels)
+    train_dataset = train_dataset.map(map_labels)
+    test_dataset = test_dataset.map(map_labels)
         
-    # Initialize and run trainer
-    trainer = AdvPromptGuardTrainer(model, tokenizer, device, log_file=log_file)
-    metrics = trainer.adversarial_train(train_dataset, test_dataset, epochs=10, batch_size=16)
+    # Initialize attack
+    attack_module = importlib.import_module('attacks')
+    strategy_class = getattr(attack_module, config['attack']['strategy'])
+    attack = strategy_class(
+        model=model,
+        tokenizer=tokenizer,
+        device=device,
+        **config['attack'].get('params', {})
+    )
+
+    # Initialize trainer
+    trainer = AdvPromptGuardTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        device=device,
+        log_file=config['model'].get('log_file', 'adv_prompt_guard.log'),
+        attack=attack
+    )
     
+    # Run training
+    metrics = trainer.adversarial_train(
+        train_dataset=train_dataset,
+        test_dataset=test_dataset,
+        epochs=config['training']['epochs'],
+        lr=config['training']['lr'],
+        batch_size=config['training']['batch_size'],
+        attack_steps=config['attack'].get('attack_steps', 20),
+    )
+
     from saving_utils import save_model_and_data, upload_to_hf_hub
-    save_model_and_data(trainer, test_dataset, attack_steps=20)
+    save_model_and_data(trainer, test_dataset, config['attack']['attack_steps'])
     upload_to_hf_hub("your-username/your-model-name", "your-hf-token")

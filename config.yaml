@@ -1,0 +1,31 @@
+# config.yaml
+training:
+  epochs: 10
+  lr: 5e-6
+  batch_size: 16
+  attack_steps: 20
+  random_steps_per_batch: true
+
+model:
+  name: meta-llama/Prompt-Guard-86M
+  device: cuda  # auto-detection still occurs, but this overrides
+  log_file: "training.log"
+
+attack:
+  strategy: "OneTokenLocalL2"  # Class name from attacks.py
+  params:
+    lr_l2: 0.08
+    lr_linf: 0.006
+    pen_l2: 0.4
+    step_size_decay: 0.94
+    # Strategy-specific parameters
+    radius_multiplier: 1.9
+    phase2_penalty: 0.05
+  attack_steps: 24
+
+datasets:
+  train_path: "synthetic-prompt-injections_train.parquet"
+  test_path: "synthetic-prompt-injections_test.parquet"
+  sample_size:
+    train: 10000  # Use null for full dataset
+    test: 100

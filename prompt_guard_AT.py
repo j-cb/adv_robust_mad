@@ -256,7 +256,7 @@ class AdvPromptGuardTrainer:
                 self.logger.info(f"Train Loss: {train_loss:.4f}")
                 
                 # Evaluate on different conditions
-                self.logger.info(f"Evaluating after Subset {subset_idx + 1}/{num_subepochs}")
+                self.logger.info(f"Evaluating after Subset {subset_idx}/{num_subepochs}")
                 
                 benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
                 train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)

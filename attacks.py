@@ -14,6 +14,9 @@ class SoftTokenAttack:
         
     def apply_projection(self, adv_emb, raw_emb, pos_indices, token_positions, step):
         return adv_emb
+    
+    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices):
+        return NotImplementedError
 
 class OneTokenLocalL2(SoftTokenAttack):
     def __init__(self, model, tokenizer, device, attack_steps=20, lr_l2=0.08, lr_linf=0.006, pen_l2=0.4, step_size_decay=0.94):
@@ -23,8 +26,7 @@ class OneTokenLocalL2(SoftTokenAttack):
         self.pen_l2 = pen_l2
         self.step_size_decay = step_size_decay
         self.attack_steps = attack_steps
-    
-        
+            
     def run_attack(self, raw_emb, attention_mask, token_positions, attacked_indices):
         adv_emb = raw_emb.clone().detach().requires_grad_(True)
         for step in range(self.attack_steps):
@@ -69,6 +71,8 @@ class OneTokenLocalL2(SoftTokenAttack):
                 )
                 adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
         return adv_emb
+    
+    __call__ = run_attack
         
 
 class MultiStepAttackStrategy(SoftTokenAttack):

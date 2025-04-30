@@ -1,7 +1,7 @@
 # config.yaml
 training:
   epochs: 10
-  lr: 5e-6
+  lr: 5.0e-6
   batch_size: 16
   attack_steps: 20
   random_steps_per_batch: true
@@ -27,5 +27,5 @@ datasets:
   train_path: "synthetic-prompt-injections_train.parquet"
   test_path: "synthetic-prompt-injections_test.parquet"
   sample_size:
-    train: 10000  # Use null for full dataset
+    train: 10240  # Use null for full dataset
     test: 100

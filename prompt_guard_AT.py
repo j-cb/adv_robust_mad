@@ -19,7 +19,6 @@ from transformers import (
     AutoTokenizer,
 )
 
-from attacks import OneTokenLocalL2
 
 class AdvPromptGuardTrainer:
     def __init__(self, model, tokenizer, device='cpu', attack=None, log_file='adv_prompt_guard.log'):
@@ -236,33 +235,48 @@ class AdvPromptGuardTrainer:
             'strong_attack_auc': []
         }
         
-        for epoch in range(epochs):
-            self.logger.info(f"\nEpoch {epoch + 1}/{epochs}")
+        for dset_epoch in range(epochs):
             
-            # Train epoch
-            train_loss = self.train_epoch(train_dataset, optimizer, batch_size, attack_steps)
-            self.logger.info(f"Train Loss: {train_loss:.4f}")
+            self.logger.info(f"\nEpoch {dset_epoch}/{epochs}")
             
-            # Evaluate on different conditions
-            benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
-            train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
-            strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+            shuffled_train = train_dataset.shuffle()
+            subset_size = 1024
+            num_subepochs = len(train_dataset)//subset_size
+            subsets = [
+                shuffled_train.select(range(i*subset_size, (i+1)*subset_size))
+                for i in range(num_subepochs)
+            ]
             
-            benign_auc = roc_auc_score(benign_labels, benign_scores)
-            train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)
-            strong_attack_auc = roc_auc_score(strong_attack_labels, strong_attack_scores)
+            for subset_idx, subset in enumerate(subsets):
+                self.logger.info(f"\nTraining Subset {subset_idx}/{num_subepochs}")
             
-            # Log epoch metrics
-            self.logger.info(f"Benign AUC: {benign_auc:.4f}")
-            self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
-            self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
-            
-            # Store metrics
-            metrics_history['epoch'].append(epoch + 1)
-            metrics_history['train_loss'].append(train_loss)
-            metrics_history['benign_auc'].append(benign_auc)
-            metrics_history['train_attack_auc'].append(train_attack_auc)
-            metrics_history['strong_attack_auc'].append(strong_attack_auc)
+                
+                # Train subepoch
+                train_loss = self.train_epoch(subset, optimizer, batch_size, attack_steps)
+                self.logger.info(f"Train Loss: {train_loss:.4f}")
+                
+                # Evaluate on different conditions
+                self.logger.info(f"Evaluating after Subset {subset_idx + 1}/{num_subepochs}")
+                
+                benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+                train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+                strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+                
+                benign_auc = roc_auc_score(benign_labels, benign_scores)
+                train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)
+                strong_attack_auc = roc_auc_score(strong_attack_labels, strong_attack_scores)
+                
+                # Log epoch metrics
+                self.logger.info(f"Benign AUC: {benign_auc:.4f}")
+                self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
+                self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
+                
+                # Store metrics
+                metrics_history['epoch'].append(dset_epoch + subset_idx/num_subepochs)
+                metrics_history['train_loss'].append(train_loss)
+                metrics_history['benign_auc'].append(benign_auc)
+                metrics_history['train_attack_auc'].append(train_attack_auc)
+                metrics_history['strong_attack_auc'].append(strong_attack_auc)
         
         # Final comprehensive evaluation
         self.logger.info("\nFinal Evaluation:")

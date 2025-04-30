@@ -359,7 +359,7 @@ if __name__ == "__main__":
         model=model,
         tokenizer=tokenizer,
         device=device,
-        log_file=config['model'].get('log_file', 'adv_prompt_guard.log'),
+        log_file=log_file,
         attack=attack
     )
     

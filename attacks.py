@@ -81,7 +81,7 @@ class OneTokenLocalL2(OneTokenBenignGradAttack):
         
     
 class OneTokenGlobalL2(OneTokenBenignGradAttack):
-    def __init__(self, model, tokenizer, device, lr_l2=0.08, lr_linf=0.006, pen_l2=0.4, step_size_decay=0.94, radius_overlap=1.1, **kwargs):
+    def __init__(self, model, tokenizer, device, lr_l2=0.08, lr_linf=0.006, pen_l2=0.2, step_size_decay=0.94, radius_overlap=1.1, **kwargs):
         super().__init__(self, model, tokenizer, device)
         
         self.lr_l2 = lr_l2
@@ -112,8 +112,42 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     dists = torch.norm(adv_emb[idx, pos] - self.hard_tokens, dim=1)
                     v0 = torch.argmin(dists)
                     if dists[v0] > self.R:
-                        direction = self.hard_tokens[v0] - adv_emb[idx, pos]
-                        adv_emb[idx, pos] += direction * (dists[v0] - self.R)
+                        vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
+                        adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - self.R)
+            elif step < 2*total_steps//3:
+                for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
+                    idx = attacked_indices[i]
+                    grad = adv_emb.grad[idx, pos]
+                    perturbation = (
+                        -grad * (self.lr_l2 * self.ites_diameter / (grad.abs().max() + 1e-8))  # L2++
+                        -grad.sign() * self.lr_linf * self.ites_diameter * probs[idx, 2].item()  # Linf
+                    )
+                    adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
+                    dists = torch.norm(adv_emb[idx, pos] - self.hard_tokens, dim=1)
+                    v0 = torch.argmin(dists)
+                    vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
+                    adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
+                    vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
+                    if dists[v0] > self.R:
+                        adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - self.R)
+            else:
+                for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
+                    idx = attacked_indices[i]
+                    grad = adv_emb.grad[idx, pos]
+                    perturbation = (
+                        -grad * (self.lr_l2 * self.ites_diameter / (grad.abs().max() + 1e-8))  # L2++
+                        -grad.sign() * self.lr_linf * self.ites_diameter * probs[idx, 2].item()  # Linf
+                    )
+                    adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
+                    dists = torch.norm(adv_emb[idx, pos] - self.hard_tokens, dim=1)
+                    v0 = torch.argmin(dists)
+                    vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
+                    adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
+                    vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
+                    R_step = self.R * (1.02 - (step+10)/(total_steps+10))
+                    if dists[v0] > R_step:
+                        adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - R_step)
+                    
         return adv_emb
 
 

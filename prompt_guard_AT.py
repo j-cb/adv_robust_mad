@@ -32,6 +32,7 @@ class AdvPromptGuardTrainer:
         
         self.hard_tokens = self.model.deberta.embeddings.word_embeddings.weight
         
+        
         # Configure logging
         logging.basicConfig(
             level=logging.INFO,
@@ -42,6 +43,7 @@ class AdvPromptGuardTrainer:
             ]
         )
         self.logger = logging.getLogger(__name__)
+        self.attack.logger = self.logger
         
         # Log initialization info
         self.logger.info(f"Initializing AdvPromptGuardTrainer on device: {device}")
@@ -49,14 +51,32 @@ class AdvPromptGuardTrainer:
         self.logger.info(f"Tokenizer: {type(tokenizer).__name__}")
         self.logger.info("Input token embedding layer frozen")
         
-    def distance_to_closest_hard_token(self, emb):
-        # Returns closest embedding of an actual element of the tokenizer's vocabulary as well as the token's ID.
-        # Last input dimension should be embedding dim.
-        # All but the last dimension are preserved. E.g. (batch_size, sequence_length, emd_dim) -> (batch_size, sequence_length, emb_dim), LongTensor(batch_size, sequence_length)
-        # broadcasting (*, 1, emd_dim) - (vocab_size, emb_dim)
-        square_distances = ((emb.unsqueeze(-2) - self.hard_tokens)**2).sum(dim=-1)
-        return tuple(torch.min(square_distances, dim=-1))
+        self.test_distance_calculation()
+
         
+    def distance_to_closest_hard_token(self, emb):
+        """Compute Euclidean distance between input embeddings and all hard-token embeddings.
+        
+        Args:
+            emb: Tensor of shape (*, embedding_dim)
+            
+        Returns:
+            min_distances: Tensor of shape (*,) containing squared L2 distances
+            closest_token_ids: LongTensor of shape (*,) with closest token IDs
+        """
+        # Ensure input has at least 2 dimensions for unsqueeze
+        if emb.dim() == 1:
+            emb = emb.unsqueeze(0)
+            
+        # Calculate squared distances: (..., 1, emb_dim) - (vocab_size, emb_dim)
+        square_distances = (emb.unsqueeze(-2) - self.hard_tokens)**2  # (..., vocab_size, emb_dim)
+        square_distances = square_distances.sum(dim=-1)  # (..., vocab_size)
+        
+        # Get closest token IDs and distances
+        min_distances, closest_token_ids = torch.min(square_distances, dim=-1)
+        return min_distances, closest_token_ids
+    
+       
     def _align_labels(self, labels):
         """Map dataset labels (0,1) to model labels (0,2)"""
         return torch.tensor([0 if x == 0 else 2 for x in labels], device=self.device)
@@ -82,8 +102,8 @@ class AdvPromptGuardTrainer:
         self.logger.info(f"Starting {eval_type} evaluation on {len(texts)} samples")
                 
         # Batch evaluation
-        scores = []
-        is_adv = []
+        scores_soft, scores_hard = [], []
+        labels_list, is_adv_list = [], []
         all_embeddings = [] if save_embeddings else None
         
         for i in range(0, len(texts), batch_size):
@@ -92,15 +112,29 @@ class AdvPromptGuardTrainer:
             
             if attack_steps > 0:
                 # Generate adversarial examples for positive samples
-                adv_emb, attention_mask = self.generate_adversarial_batch(
+                adv_emb, attention_mask, input_ids_hard = self.generate_adversarial_batch(
                     batch_texts, batch_labels, attack, attack_steps)
+                
                 # Directly use the adversarial embeddings
                 norm_emb = self.model.deberta.embeddings.LayerNorm(adv_emb)
                 outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
                 logits = self.model.classifier(self.model.pooler(outputs))
                 probs = torch.softmax(logits, dim=-1)
-                batch_scores = probs[:, 2].detach().cpu().numpy()  # Jailbreak class score
-                batch_is_adv = [1 if label == 1 else 0 for label in batch_labels]
+                batch_scores_soft = probs[:, 2].detach().cpu().numpy()  # Jailbreak class score
+                
+                # Hard-token evaluation (using input_ids_hard)
+                inputs_hard = {
+                    'input_ids': input_ids_hard.to(self.device),
+                    'attention_mask': attention_mask.to(self.device)
+                }
+                with torch.no_grad():
+                    logits_hard = self.model(**inputs_hard).logits
+                    batch_scores_hard = torch.softmax(logits_hard, dim=-1)[:, 2].cpu().numpy()
+                
+                scores_soft.extend(batch_scores_soft)
+                scores_hard.extend(batch_scores_hard)
+                is_adv_list.extend([1 if lbl == 2 else 0 for lbl in batch_labels])
+                
                 if save_embeddings:
                     batch_emb = adv_emb.detach().cpu().numpy()
                     all_embeddings.append(batch_emb)
@@ -111,21 +145,24 @@ class AdvPromptGuardTrainer:
                 with torch.no_grad():
                     logits = self.model(**inputs).logits
                     probs = torch.softmax(logits, dim=-1)
-                    batch_scores = probs[:, 2].cpu().numpy()
-                batch_is_adv = [0] * len(batch_texts)
+                    batch_scores_soft = probs[:, 2].cpu().numpy()
+                    
+                scores_soft.extend(batch_scores_soft)
+                scores_hard.extend(batch_scores_soft)  # Same as soft
+                is_adv_list.extend([0] * len(batch_texts))    
+                
                 if save_embeddings:
                     with torch.no_grad():
                         emb = self.model.deberta.embeddings.word_embeddings(inputs['input_ids'])
                     batch_emb = emb.detach().cpu().numpy()
                     all_embeddings.append(batch_emb)
             
-            scores.extend(batch_scores)
-            is_adv.extend(batch_is_adv)
+            labels_list.extend(batch_labels)
         
         self.logger.info(f"Completed {eval_type} evaluation")
         if save_embeddings:
             all_embeddings = np.concatenate(all_embeddings, axis=0)
-        return np.array(scores), np.array(labels), np.array(is_adv), all_embeddings
+        return np.array(scores_soft), np.array(scores_hard), np.array(labels_list), np.array(is_adv_list), all_embeddings
     
     def generate_adversarial_batch(self, texts, labels, attack=None, attack_steps=20):
         """Generate adversarial examples by modifying one random token per positive input"""
@@ -142,7 +179,7 @@ class AdvPromptGuardTrainer:
             # Return original embeddings if no positives in batch
             with torch.no_grad():
                 raw_emb = self.model.deberta.embeddings.word_embeddings(input_ids)
-            return raw_emb, attention_mask
+            return raw_emb, attention_mask, input_ids
         
         # Get embeddings for all examples
         with torch.no_grad():
@@ -154,7 +191,20 @@ class AdvPromptGuardTrainer:
         
         final_emb, attention_mask = attack(raw_emb, attention_mask, token_positions, positive_class_indices, attack_steps)
         
-        return final_emb, attention_mask
+        # Replace attacked positions with closest hard tokens
+        input_ids_hard = input_ids.clone()
+        for i, (idx, pos) in enumerate(zip(positive_class_indices, token_positions)):
+            # Get adversarial embedding for this token
+            adv_token_emb = final_emb[idx, pos]
+            
+            # Find closest hard token ID
+            _, closest_token_id = self.distance_to_closest_hard_token(adv_token_emb.unsqueeze(0))
+            closest_token_id = closest_token_id.squeeze().item()
+            
+            # Update input_ids_hard
+            input_ids_hard[idx, pos] = closest_token_id
+        
+        return final_emb, attention_mask, input_ids_hard
     
     def train_epoch(self, train_dataset, optimizer, batch_size=16, attack_steps=20, random_steps_per_batch=True):
         """Train for one epoch with adversarial examples"""
@@ -173,7 +223,7 @@ class AdvPromptGuardTrainer:
             if random_steps_per_batch:
                 # roughly 20% no attack, 20% full steps, rest in between.
                 num_steps = np.clip(np.random.randint(low=-attack_steps//3, high=attack_steps+attack_steps//3), 0, attack_steps)
-            adv_emb, attention_mask = self.generate_adversarial_batch(
+            adv_emb, attention_mask, adv_hard = self.generate_adversarial_batch(
                 batch_texts, batch_labels, self.attack, num_steps
             )
             
@@ -214,17 +264,24 @@ class AdvPromptGuardTrainer:
         self.logger.info("\nInitial Evaluation:")
         
         # Evaluate on different conditions
-        benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
-        train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
-        strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+        benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+        train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+        strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
         
-        benign_auc = roc_auc_score(benign_labels, benign_scores)
-        train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)
-        strong_attack_auc = roc_auc_score(strong_attack_labels, strong_attack_scores)
+        benign_auc = roc_auc_score(benign_labels, benign_soft)
+        train_attack_auc = roc_auc_score(train_labels, train_soft)
+        strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
+        benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
+        train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
+        strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
         
         self.logger.info(f"Benign AUC: {benign_auc:.4f}")
         self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
         self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
+        
+        self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
+        self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
+        self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
         
         # Store metrics for final report
         metrics_history = {
@@ -232,7 +289,9 @@ class AdvPromptGuardTrainer:
             'train_loss': [],
             'benign_auc': [],
             'train_attack_auc': [],
-            'strong_attack_auc': []
+            'strong_attack_auc': [],
+            'train_attack_hard_auc': [],
+            'strong_attack_hard_auc': []
         }
         
         for dset_epoch in range(epochs):
@@ -258,18 +317,25 @@ class AdvPromptGuardTrainer:
                 # Evaluate on different conditions
                 self.logger.info(f"Evaluating after Subset {subset_idx}/{num_subepochs}")
                 
-                benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
-                train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
-                strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
-                
-                benign_auc = roc_auc_score(benign_labels, benign_scores)
-                train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)
-                strong_attack_auc = roc_auc_score(strong_attack_labels, strong_attack_scores)
+                benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+                train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+                strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+        
+                benign_auc = roc_auc_score(benign_labels, benign_soft)
+                train_attack_auc = roc_auc_score(train_labels, train_soft)
+                strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
+                benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
+                train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
+                strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
                 
                 # Log epoch metrics
                 self.logger.info(f"Benign AUC: {benign_auc:.4f}")
                 self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
                 self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
+                
+                self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
+                self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
+                self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
                 
                 # Store metrics
                 metrics_history['epoch'].append(dset_epoch + subset_idx/num_subepochs)
@@ -277,21 +343,31 @@ class AdvPromptGuardTrainer:
                 metrics_history['benign_auc'].append(benign_auc)
                 metrics_history['train_attack_auc'].append(train_attack_auc)
                 metrics_history['strong_attack_auc'].append(strong_attack_auc)
+                metrics_history['train_attack_hard_auc'].append(train_attack_hard_auc)
+                metrics_history['strong_attack_hard_auc'].append(strong_attack_hard_auc)
         
         # Final comprehensive evaluation
         self.logger.info("\nFinal Evaluation:")
-        benign_scores, benign_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
-        train_attack_scores, train_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
-        strong_attack_scores, strong_attack_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+        benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+        train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+        strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+
+        benign_auc = roc_auc_score(benign_labels, benign_soft)
+        train_attack_auc = roc_auc_score(train_labels, train_soft)
+        strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
+        benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
+        train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
+        strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
         
-        benign_auc = roc_auc_score(benign_labels, benign_scores)
-        train_attack_auc = roc_auc_score(train_attack_labels, train_attack_scores)
-        strong_attack_auc = roc_auc_score(strong_attack_labels, strong_attack_scores)
-        
+        # Log epoch metrics
         self.logger.info("\nFinal Performance:")
         self.logger.info(f"Benign AUC: {benign_auc:.4f}")
         self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
         self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
+        
+        self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
+        self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
+        self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
         
         # Log metrics summary
         self.logger.info("\nTraining Summary:")
@@ -300,7 +376,16 @@ class AdvPromptGuardTrainer:
         
         # Return metrics for potential further analysis
         return metrics_history
-
+        
+        
+    #Tests    
+    
+    def test_distance_calculation(self):
+        test_emb = self.hard_tokens[42]  # Pick a known token embedding
+        distances, ids = self.distance_to_closest_hard_token(test_emb)
+        assert ids.item() == 42, "Closest token should be itself!"
+        assert torch.isclose(distances, torch.tensor(0.0)), "Distance to self should be zero!"
+        
 if __name__ == "__main__":
     
     # Load config

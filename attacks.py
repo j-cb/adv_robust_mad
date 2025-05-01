@@ -1,10 +1,13 @@
 import torch
-
+import logging
 class SoftTokenAttack:
-    def __init__(self, model, tokenizer, device):
+    def __init__(self, model, tokenizer, device, logger=None):
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
+        
+        self.logger = logger or logging.getLogger(__name__)
+                
         # adjust this if not using prompt-guard or other deberta model  
         self.hard_tokens = model.deberta.embeddings.word_embeddings.weight
         self.ites_diameter = self.hard_tokens.max() - self.hard_tokens.min()
@@ -82,7 +85,7 @@ class OneTokenLocalL2(OneTokenBenignGradAttack):
     
 class OneTokenGlobalL2(OneTokenBenignGradAttack):
     def __init__(self, model, tokenizer, device, lr_l2=0.08, lr_linf=0.006, pen_l2=0.2, step_size_decay=0.94, radius_overlap=1.1, **kwargs):
-        super().__init__(self, model, tokenizer, device)
+        super().__init__(model, tokenizer, device)
         
         self.lr_l2 = lr_l2
         self.lr_linf = lr_linf
@@ -91,6 +94,7 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
         self.radius_overlap = radius_overlap
         
         self.R = self.compute_radius()
+        self.logger.info(f"[Attack] Initialized with radius R={self.R:.4f}")
         
     def compute_radius(self):
         pairwise_dist = torch.cdist(self.hard_tokens, self.hard_tokens, p=2)

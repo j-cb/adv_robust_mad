@@ -9,17 +9,16 @@ training:
 model:
   name: meta-llama/Prompt-Guard-86M
   device: cuda  # auto-detection still occurs, but this overrides
-  log_file: "training.log"
 
 attack:
-  strategy: "OneTokenLocalL2"  # Class name from attacks.py
+  strategy: "OneTokenGlobalL2"  # Class name from attacks.py
   params:
     lr_l2: 0.08
     lr_linf: 0.006
-    pen_l2: 0.4
+    pen_l2: 0.2
     step_size_decay: 0.94
     # Strategy-specific parameters
-    radius_multiplier: 1.9
+    radius_overlap: 1.1
     phase2_penalty: 0.05
   attack_steps: 24
 

@@ -115,7 +115,7 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
     def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, total_steps, attacked_indices, token_positions):
         assert adv_emb.grad is not None
         with torch.no_grad():
-            if step < total_steps: #//3:
+            if step < total_steps//3:
                 for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
                     idx = attacked_indices[i]
                     grad = adv_emb.grad[idx, pos]
@@ -171,7 +171,7 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
                     adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
-                    R_step = self.R * (1.0 - (step+10)/(total_steps+9))
+                    R_step = self.R * (1.02 - (step+10)/(total_steps+9))
                     if torch.norm(vec_to_hard_token) > R_step:
                         adv_emb[idx, pos] += vec_to_hard_token/torch.norm(vec_to_hard_token) * (torch.norm(vec_to_hard_token) - R_step)
                     

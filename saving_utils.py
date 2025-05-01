@@ -11,7 +11,7 @@ def save_model_and_data(trainer, test_dataset, attack_steps, save_dir="output"):
     
     # Save evaluation data (texts + embeddings)
     def _save_eval_data(attack_steps_val, suffix):
-        scores, labels, is_adv, embeddings = trainer.evaluate(
+        scores_soft, scores_hard, labels, is_adv, embeddings = trainer.evaluate(
             test_dataset, 
             attack_steps=attack_steps_val,
             save_embeddings=True

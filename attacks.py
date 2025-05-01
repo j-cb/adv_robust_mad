@@ -93,12 +93,23 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
         self.step_size_decay = step_size_decay
         self.radius_overlap = radius_overlap
         
-        self.R = self.compute_radius()
+        self.R = self.compute_radius(sample_size=7000) 
         self.logger.info(f"[Attack] Initialized with radius R={self.R:.4f}")
         
-    def compute_radius(self):
-        pairwise_dist = torch.cdist(self.hard_tokens, self.hard_tokens, p=2)
-        return pairwise_dist.max() * self.radius_overlap / 2
+    def compute_radius(self, sample_size=1000):
+        """Approximate max token distance using a subset of tokens"""
+        if len(self.hard_tokens) > 10_000:  # Only sample if vocab is large
+            indices = torch.randint(0, len(self.hard_tokens), (sample_size,))
+            sampled_tokens = self.hard_tokens[indices]
+        else:
+            sampled_tokens = self.hard_tokens
+        
+        # Compute on CPU to save GPU memory
+        sampled_tokens_cpu = sampled_tokens.to("cpu")
+        pairwise_dist = torch.cdist(sampled_tokens_cpu, sampled_tokens_cpu, p=2)
+        max_dist = pairwise_dist.max()
+        
+        return (max_dist * self.radius_overlap / 2).to(self.hard_tokens.device)
     
     # One should be able to inherit form OneTokenLocalL2 and only change the following to modify the attack.
     def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, total_steps, attacked_indices, token_positions):
@@ -113,8 +124,11 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                         -grad.sign() * self.lr_linf * self.ites_diameter * probs[idx, 2].item()  # Linf
                     )
                     adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
-                    dists = torch.norm(adv_emb[idx, pos] - self.hard_tokens, dim=1)
-                    v0 = torch.argmin(dists)
+                    
+                    with torch.autocast(device_type='cuda', dtype=torch.float16):
+                        dists = torch.norm(adv_emb[idx, pos].half() - self.hard_tokens.half(), dim=1)
+                    v0 = torch.argmin(dists.float())
+                    
                     if dists[v0] > self.R:
                         vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
                         adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - self.R)
@@ -127,8 +141,11 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                         -grad.sign() * self.lr_linf * self.ites_diameter * probs[idx, 2].item()  # Linf
                     )
                     adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
-                    dists = torch.norm(adv_emb[idx, pos] - self.hard_tokens, dim=1)
-                    v0 = torch.argmin(dists)
+                    
+                    with torch.autocast(device_type='cuda', dtype=torch.float16):
+                        dists = torch.norm(adv_emb[idx, pos].half() - self.hard_tokens.half(), dim=1)
+                    v0 = torch.argmin(dists.float())
+                    
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
                     adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
@@ -143,8 +160,12 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                         -grad.sign() * self.lr_linf * self.ites_diameter * probs[idx, 2].item()  # Linf
                     )
                     adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
-                    dists = torch.norm(adv_emb[idx, pos] - self.hard_tokens, dim=1)
-                    v0 = torch.argmin(dists)
+                    
+                    
+                    with torch.autocast(device_type='cuda', dtype=torch.float16):
+                        dists = torch.norm(adv_emb[idx, pos].half() - self.hard_tokens.half(), dim=1)
+                    v0 = torch.argmin(dists.float())
+                    
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
                     adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
@@ -153,6 +174,7 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                         adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - R_step)
                     
         return adv_emb
+
 
 
 class MultiStepAttackStrategy(SoftTokenAttack):

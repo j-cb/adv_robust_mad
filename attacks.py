@@ -169,7 +169,7 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
                     adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
-                    R_step = self.R * (1.02 - (step+10)/(total_steps+10))
+                    R_step = self.R * (1.0 - (step+10)/(total_steps+9))
                     if dists[v0] > R_step:
                         adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - R_step)
                     

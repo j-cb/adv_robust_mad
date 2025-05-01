@@ -131,7 +131,8 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     
                     if dists[v0] > self.R:
                         vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
-                        adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - self.R)
+                        adv_emb[idx, pos] += vec_to_hard_token/torch.norm(vec_to_hard_token) * (torch.norm(vec_to_hard_token) - self.R)
+                        
             elif step < 2*total_steps//3:
                 for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
                     idx = attacked_indices[i]
@@ -151,6 +152,7 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
                     if dists[v0] > self.R:
                         adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - self.R)
+                        
             else:
                 for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
                     idx = attacked_indices[i]
@@ -170,8 +172,8 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
                     R_step = self.R * (1.0 - (step+10)/(total_steps+9))
-                    if dists[v0] > R_step:
-                        adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - R_step)
+                    if torch.norm(vec_to_hard_token) > R_step:
+                        adv_emb[idx, pos] += vec_to_hard_token/torch.norm(vec_to_hard_token) * (torch.norm(vec_to_hard_token) - R_step)
                     
         return adv_emb
 

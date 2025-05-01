@@ -131,7 +131,7 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     
                     if dists[v0] > self.R:
                         vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
-                        adv_emb[idx, pos] += vec_to_hard_token/torch.norm(vec_to_hard_token) * (torch.norm(vec_to_hard_token) - self.R)
+                        adv_emb[idx, pos] += vec_to_hard_token * (1 - self.R/torch.norm(vec_to_hard_token))
                         
             elif step < 2*total_steps//3:
                 for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
@@ -148,10 +148,11 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     v0 = torch.argmin(dists.float())
                     
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
-                    adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
+                    adv_emb[idx, pos] += (self.step_size_decay**step) * vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
                     if dists[v0] > self.R:
-                        adv_emb[idx, pos] += vec_to_hard_token * (dists[v0] - self.R)
+                        vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
+                        adv_emb[idx, pos] += vec_to_hard_token * (1 - self.R/torch.norm(vec_to_hard_token))
                         
             else:
                 for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
@@ -169,12 +170,14 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
                     v0 = torch.argmin(dists.float())
                     
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
-                    adv_emb[idx, pos] += vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
+                    adv_emb[idx, pos] += (self.step_size_decay**step) * vec_to_hard_token * self.pen_l2 * probs[idx, 0].item()
                     vec_to_hard_token = self.hard_tokens[v0] - adv_emb[idx, pos]
-                    R_step = self.R * (1.02 - (step+10)/(total_steps+9))
+                    R_step = self.R*(1. - 0.3*(step+10)/(total_steps+9))
                     if torch.norm(vec_to_hard_token) > R_step:
-                        adv_emb[idx, pos] += vec_to_hard_token/torch.norm(vec_to_hard_token) * (torch.norm(vec_to_hard_token) - R_step)
-                    
+                        adv_emb[idx, pos] += vec_to_hard_token * (1 - R_step/torch.norm(vec_to_hard_token))
+                    #print(f'{torch.norm(self.hard_tokens[v0] - adv_emb[idx, pos]).item():.4f}, {self.R:.4f}')
+
+        #print(f'{step:02d} {probs[:,2].mean().item():.4f},  {torch.norm(adv_emb-raw_emb).mean().item():.4f}, {self.R:.4f}')
         return adv_emb
 
 

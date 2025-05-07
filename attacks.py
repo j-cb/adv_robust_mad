@@ -1,6 +1,5 @@
 import torch
 import logging
-from hard_attacks import HardTokenAttacker
 class SoftTokenAttack:
     def __init__(self, model, tokenizer, device, logger=None):
         self.model = model
@@ -46,8 +45,8 @@ class OneTokenBenignGradAttack(SoftTokenAttack):
             # Maximize benign class (0) probability for jailbreak examples
             loss = -torch.log(probs[attacked_indices, 0]).mean()
             loss.backward()
-            
-            adv_emb = self.compute_perturbation(modified_emb, raw_emb, loss, probs, step, attack_steps, attacked_indices, token_positions)
+                        
+            adv_emb = self.compute_perturbation(adv_emb, raw_emb, loss, probs, step, attack_steps, attacked_indices, token_positions)
             
         # Create final embeddings with adversarial modifications
         final_emb = raw_emb.clone()

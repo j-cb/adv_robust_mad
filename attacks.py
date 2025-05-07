@@ -226,6 +226,7 @@ class GCG(SoftTokenAttack):
     
     def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices, attack_steps=100, token_possible_positions=range(10), topk=32):
         adv_emb = raw_emb.clone().detach().requires_grad_(True)
+        
         for step in range(attack_steps):
             if adv_emb.grad is not None:
                 adv_emb.grad.zero_()
@@ -246,21 +247,24 @@ class GCG(SoftTokenAttack):
             self.model.zero_grad()
             
             top_hard_token_gradients = torch.topk(hard_token_gradients, topk, dim=-1).indices # same batch size for forward pass per sample
+            
+            modified_emb = adv_emb.clone().detach().requires_grad_(False)
             for j in attacked_indices:
                 candidates = [adv_emb[j].clone()]
                 for b in range(raw_emb.shape[0]-1): #same batch size as outside for forward pass
-                    replaced_pos = token_possible_positions[torch.randint(len(token_possible_positions))]
-                    choice_from_topk = torch.randint(topk)
+                    replaced_pos = token_possible_positions[torch.randint(len(token_possible_positions), (1,))[0]]
+                    choice_from_topk = torch.randint(topk, (1,))[0]
                     replacement_token_id = top_hard_token_gradients[j, replaced_pos, choice_from_topk]
                     replacement_token = self.hard_tokens[replacement_token_id]
                     candidate = adv_emb[j].clone()
                     candidate[replaced_pos] = replacement_token
-                    candidates.append[candidate]
+                    candidates.append(candidate)
                 candidates = torch.stack(candidates)
                 attention_mask_candidates = torch.stack(len(candidates)*[attention_mask[j]])
-                adv_emb[j] = self.best_candidate(candidates, attention_mask_candidates)
-        
+                modified_emb[j] = self.best_candidate(candidates, attention_mask_candidates)
             
+            adv_emb = modified_emb.clone().detach().requires_grad_(True)
+
         return adv_emb, attention_mask
     
     def best_candidate(self, candidate_embs, attention_mask):

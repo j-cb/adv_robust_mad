@@ -26,6 +26,8 @@ class AdvPromptGuardTrainer:
         self.tokenizer = tokenizer
         self.device = device
         self.attack = attack
+        self.gcg_attack = gcg_attack
+
         
         # Input token embeddings should not be trained (especially when they define the threat model)
         model.deberta.embeddings.requires_grad_(False)
@@ -283,6 +285,9 @@ class AdvPromptGuardTrainer:
         self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
         self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
         
+        gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset, batch_size, self.gcg_attack, attack_steps=100)
+        
+        
         # Store metrics for final report
         metrics_history = {
             'epoch': [],
@@ -437,15 +442,23 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         device=device,
         **config['attack'].get('params', {})
+    
+    gcg_class = getattr(attack_module, GCG)
+    gcg_attack = gcg_class(
+        model=model,
+        tokenizer=tokenizer,
+        device=device,
+        **config['attack'].get('params', {})
     )
-
+    
     # Initialize trainer
     trainer = AdvPromptGuardTrainer(
         model=model,
         tokenizer=tokenizer,
         device=device,
         log_file=log_file,
-        attack=attack
+        attack=attack,
+        gcg_attack=gcg_attack
     )
     
     # Run training

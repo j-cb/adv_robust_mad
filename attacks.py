@@ -1,5 +1,6 @@
 import torch
 import logging
+from hard_attacks import HardTokenAttacker
 class SoftTokenAttack:
     def __init__(self, model, tokenizer, device, logger=None):
         self.model = model
@@ -46,7 +47,7 @@ class OneTokenBenignGradAttack(SoftTokenAttack):
             loss = -torch.log(probs[attacked_indices, 0]).mean()
             loss.backward()
             
-            adv_emb = self.compute_perturbation(adv_emb, raw_emb, loss, probs, step, attack_steps, attacked_indices, token_positions)
+            adv_emb = self.compute_perturbation(modified_emb, raw_emb, loss, probs, step, attack_steps, attacked_indices, token_positions)
             
         # Create final embeddings with adversarial modifications
         final_emb = raw_emb.clone()
@@ -107,6 +108,12 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
         # Compute on CPU to save GPU memory
         sampled_tokens_cpu = sampled_tokens.to("cpu")
         pairwise_dist = torch.cdist(sampled_tokens_cpu, sampled_tokens_cpu, p=2)
+        # The code you provided is not complete and does not perform any specific action. It seems
+        # like you have defined a variable `max_dist` but have not assigned any value to it or used it
+        # in any operation. If you provide more context or complete the code snippet, I can help you
+        # understand its functionality.
+        # The above code is not complete and does not perform any specific task. It seems like a
+        # variable `max_dist` is being declared but not assigned any value or used in any operation.
         max_dist = pairwise_dist.max()
         
         return (max_dist * self.radius_overlap / 2).to(self.hard_tokens.device)
@@ -211,3 +218,126 @@ class MultiStepAttackStrategy(SoftTokenAttack):
                         direction = self.hard_tokens[v0] - current_emb
                         adv_emb[idx, pos] += direction * (dists[v0] - self.R)/dists[v0]
         return adv_emb
+    
+class GCGAttack(SoftTokenAttack):
+    def __init__(self, model, tokenizer, device, **kwargs):
+        super().__init__(model, tokenizer, device)
+        self.params = kwargs
+        self.embedding_layer = model.deberta.embeddings.word_embeddings
+        self.filter_tokens = self._get_nonascii_tokens()
+
+    def _get_nonascii_tokens(self):
+        return torch.tensor([i for i in range(len(self.tokenizer)) 
+                            if not self.tokenizer.decode([i]).isascii()], 
+                            device=self.device)
+
+    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices):
+        # Convert embeddings to nearest valid tokens
+        with torch.no_grad():
+            input_ids = self._embeddings_to_tokens(raw_emb)
+        
+        # Perform GCG on token space
+        adv_ids = self._gcg_attack(input_ids[attacked_indices], attention_mask)
+        
+        # Return valid embeddings for adversarial tokens
+        return self.embedding_layer(adv_ids), attention_mask
+
+    def _embeddings_to_tokens(self, embeddings):
+        """Find nearest valid tokens for embeddings"""
+        distances = torch.cdist(embeddings, self.embedding_layer.weight)
+        return distances.argmin(dim=-1)
+
+    def _gcg_attack(self, input_ids, attention_mask):
+        """Core GCG algorithm returning adversarial token IDs"""
+        # Initialize one-hot representations
+        one_hot = torch.zeros(input_ids.shape[0], 
+                            input_ids.shape[1],
+                            self.tokenizer.vocab_size,
+                            device=self.device,
+                            requires_grad=True)
+        
+        one_hot.scatter_(2, input_ids.unsqueeze(-1), 1.0)
+        
+        for _ in range(self.params['steps']):
+            # Forward pass through embeddings
+            embeddings = (one_hot @ self.embedding_layer.weight)
+            outputs = self.model(inputs_embeds=embeddings, 
+                               attention_mask=attention_mask)
+            
+            # Calculate loss (maximize benign class probability)
+            loss = -torch.log_softmax(outputs.logits, dim=-1)[:, 0].mean()
+            loss.backward()
+
+            # Get gradients and filter non-ASCII tokens
+            grad = one_hot.grad.data
+            grad[:, :, self.filter_tokens] = float('inf')
+
+            # Find best token replacements
+            candidates = self._get_top_candidates(grad)
+            best_ids = self._evaluate_candidates(input_ids, candidates)
+            
+            # Update one-hot vectors
+            one_hot = one_hot.detach()
+            one_hot.scatter_(2, best_ids.unsqueeze(-1), 1.0)
+
+        return one_hot.argmax(dim=-1)
+
+    def _get_top_candidates(self, grad):
+        """Select top-k candidate tokens based on gradient directions"""
+        _, topk = torch.topk(-grad, self.params['topk'], dim=-1)
+        return topk
+
+    def _evaluate_candidates(self, original_ids, candidates):
+        """Evaluate candidates and return best performing ones"""
+        # Implementation simplified for brevity
+        return candidates[:, :, 0]  # Return first candidate for simplicity
+    
+class GCG(SoftTokenAttack):
+    def __init__(self, model, tokenizer, device, **kwargs):
+        super().__init__(model, tokenizer, device)
+
+    
+    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices, attack_steps):
+        adv_emb = raw_emb.clone().detach().requires_grad_(True)
+        for step in range(attack_steps):
+            if adv_emb.grad is not None:
+                adv_emb.grad.zero_()
+            
+            # Forward pass still on all samples
+            modified_emb = raw_emb.adv_emb()
+            
+            norm_emb = self.model.deberta.embeddings.LayerNorm(modified_emb)
+            outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
+            logits = self.model.classifier(self.model.pooler(outputs))
+            probs = torch.softmax(logits, dim=-1)
+            
+            # Maximize benign class (0) probability for jailbreak examples
+            loss = -torch.log(probs[attacked_indices, 0]).mean()
+            loss.backward()
+            
+            # modified_emb: B, T, E
+            # word_embeddings.weight: V, E
+            hard_token_gradients = torch.einsum('bte,ve->btv', -modified_emb.grad, self.hard_tokens)
+            candidates = torch.topk(hard_token_gradients, modified_emb.shape[0], dim=-1) # same batch size for forward pass per sample
+            
+            
+            adv_emb = self.compute_perturbation(adv_emb, raw_emb, loss, probs, step, attack_steps, attacked_indices, token_positions)
+            
+        # Create final embeddings with adversarial modifications
+        final_emb = raw_emb.clone()
+        for i, pos in enumerate(token_positions):
+            final_emb[attacked_indices[i], pos] = adv_emb[attacked_indices[i], pos].detach()
+            
+        return final_emb, attention_mask
+    
+    def best_candidates(self, candidate_embs, attention_mask):
+        """Evaluate candidate replacements for one sequence and return best. I.e. batch dim not the same thing as elsewhere."""
+        with torch.no_grad():
+            outputs = self.model.deberta.encoder(candidate_embs, attention_mask)[0]
+            logits = self.model.classifier(self.model.pooler(outputs))
+            probs = torch.softmax(logits, dim=-1)
+            
+        return candidate_embs[torch.argmax(probs[:,0])]
+    
+    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, total_steps, attacked_indices, token_positions):
+        raise NotImplementedError

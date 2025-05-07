@@ -13,7 +13,7 @@ model:
 attack:
   strategy: "OneTokenGlobalL2"  # Class name from attacks.py
   params:
-    lr_l2: 0.08
+    lr_l2: 0.04
     lr_linf: 0.006
     pen_l2: 0.2
     step_size_decay: 0.94

@@ -21,7 +21,7 @@ from transformers import (
 
 
 class AdvPromptGuardTrainer:
-    def __init__(self, model, tokenizer, device='cpu', attack=None, gcg_attack=None, log_file='adv_prompt_guard.log'):
+    def __init__(self, model, tokenizer, device='cpu', attack=None, gcg_attack=None, cofig=None, log_file='adv_prompt_guard.log'):
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
@@ -497,7 +497,8 @@ if __name__ == "__main__":
         device=device,
         log_file=log_file,
         attack=attack,
-        gcg_attack=gcg_attack
+        gcg_attack=gcg_attack,
+        config=config
     )
     
     # Run training

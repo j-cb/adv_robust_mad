@@ -211,7 +211,7 @@ class AdvPromptGuardTrainer:
             if diff > 0.0001:
                 raise ValueError(f'GCG not producing hard tokens correctly. Max Embedding Deviation: {diff:.6f} (Should be 0.0)')
             
-            self.logger.info(f"GCG final_emb == input_ids_hard confimed.")
+            self.logger.info(f"GCG outputs all hards tokens confirmed.")
             
         else:
             # Replace attacked positions with closest hard tokens
@@ -313,7 +313,7 @@ class AdvPromptGuardTrainer:
             self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
             self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
         if eval_config['run_gcg']:
-            gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
+            gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=500)
             gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
         
             gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)
@@ -387,7 +387,7 @@ class AdvPromptGuardTrainer:
                     metrics_history['strong_attack_auc'].append(strong_attack_auc)
                     metrics_history['strong_attack_hard_auc'].append(strong_attack_hard_auc)
                 if eval_config['run_gcg']:
-                    gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
+                    gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=500)
                     gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
                 
                     gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)
@@ -422,7 +422,7 @@ class AdvPromptGuardTrainer:
             self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
             self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
         if eval_config['run_gcg']:
-            gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
+            gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=500)
             gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
         
             gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)

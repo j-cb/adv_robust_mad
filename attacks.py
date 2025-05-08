@@ -234,6 +234,7 @@ class GCG(SoftTokenAttack):
                 modified_emb[j] = self.best_candidate(candidates, attention_mask_candidates)
             
             adv_emb = modified_emb.clone().detach().requires_grad_(True)
+            print(f'step {step:02d}. probs benign on adv: {probs[attacked_indices, 0].mean().item():.4f}')
 
         with torch.no_grad():
             batch_size, seq_len, emb_dim = adv_emb.shape

@@ -21,12 +21,13 @@ from transformers import (
 
 
 class AdvPromptGuardTrainer:
-    def __init__(self, model, tokenizer, device='cpu', attack=None, gcg_attack=None, cofig=None, log_file='adv_prompt_guard.log'):
+    def __init__(self, model, tokenizer, device='cpu', attack=None, gcg_attack=None, config=None, log_file='adv_prompt_guard.log'):
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
         self.attack = attack
         self.gcg_attack = gcg_attack
+        self.config=config
 
         
         # Input token embeddings should not be trained (especially when they define the threat model)

@@ -194,18 +194,35 @@ class AdvPromptGuardTrainer:
         
         final_emb, attention_mask = attack(raw_emb, attention_mask, token_positions, positive_class_indices, attack_steps)
         
-        # Replace attacked positions with closest hard tokens
-        input_ids_hard = input_ids.clone()
-        for i, (idx, pos) in enumerate(zip(positive_class_indices, token_positions)):
-            # Get adversarial embedding for this token
-            adv_token_emb = final_emb[idx, pos]
+        if type(attack).__name__ == "GCG":
+            input_ids_hard = input_ids.clone()
+            for i, idx in enumerate(positive_class_indices):
+                for pos in range(10):
+                    # Get adversarial embedding for this token
+                    adv_token_emb = final_emb[idx, pos]
+                    
+                    # Find closest hard token ID
+                    _, closest_token_id = self.distance_to_closest_hard_token(adv_token_emb.unsqueeze(0))
+                    closest_token_id = closest_token_id.squeeze().item()
+                    
+                    # Update input_ids_hard
+                    input_ids_hard[idx, pos] = closest_token_id
+            assert final_emb == input_ids_hard
+            self.logger.info(f"GCG final_emb == input_ids_hard confimed.")
             
-            # Find closest hard token ID
-            _, closest_token_id = self.distance_to_closest_hard_token(adv_token_emb.unsqueeze(0))
-            closest_token_id = closest_token_id.squeeze().item()
-            
-            # Update input_ids_hard
-            input_ids_hard[idx, pos] = closest_token_id
+        else:
+            # Replace attacked positions with closest hard tokens
+            input_ids_hard = input_ids.clone()
+            for i, (idx, pos) in enumerate(zip(positive_class_indices, token_positions)):
+                # Get adversarial embedding for this token
+                adv_token_emb = final_emb[idx, pos]
+                
+                # Find closest hard token ID
+                _, closest_token_id = self.distance_to_closest_hard_token(adv_token_emb.unsqueeze(0))
+                closest_token_id = closest_token_id.squeeze().item()
+                
+                # Update input_ids_hard
+                input_ids_hard[idx, pos] = closest_token_id
         
         return final_emb, attention_mask, input_ids_hard
     

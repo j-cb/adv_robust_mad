@@ -251,6 +251,12 @@ class AdvPromptGuardTrainer:
         """Full adversarial training loop with comprehensive evaluation"""
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         test_dataset_gcg = test_dataset.select(range(2*batch_size))
+        eval_config = self.config.get('evaluation', {
+                'run_benign': True,
+                'run_train_attack': True,
+                'run_strong_attack': True,
+                'run_gcg': True
+            })
         
         # Log training configuration
         self.logger.info("\n" + "="*50)
@@ -267,35 +273,35 @@ class AdvPromptGuardTrainer:
         self.logger.info("\nInitial Evaluation:")
         
         # Evaluate on different conditions
-        benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
-        train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
-        strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+        if eval_config['run_benign']:
+            benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+            benign_auc = roc_auc_score(benign_labels, benign_soft)
+            benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
+            self.logger.info(f"Benign AUC: {benign_auc:.4f}")
+            self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
+        if eval_config['run_train_attack']:
+            train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+            train_attack_auc = roc_auc_score(train_labels, train_soft)
+            train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
+            self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
+            self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
+        if eval_config['run_strong_attack']:
+            strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+            strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
+            strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
+            self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
+            self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
+        if eval_config['run_gcg']:
+            gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
+            gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
         
-        benign_auc = roc_auc_score(benign_labels, benign_soft)
-        train_attack_auc = roc_auc_score(train_labels, train_soft)
-        strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
-        benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
-        train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
-        strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
-        
-        self.logger.info(f"Benign AUC: {benign_auc:.4f}")
-        self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
-        self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
-        
-        self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
-        self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
-        self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
-        
-        gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
-        gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
-        
-        gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)
-        gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
-        gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)
-        self.logger.info(f"GCG ({len(test_dataset_gcg)} samples)")         
-        self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
-        self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
-        self.logger.info(f"benign AUC GCG subset: {gcg_benign_auc:.4f}")
+            gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)
+            gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
+            gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)
+            self.logger.info(f"GCG ({len(test_dataset_gcg)} samples)")         
+            self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
+            self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
+            self.logger.info(f"benign AUC GCG subset: {gcg_benign_auc:.4f}")
         
         # Store metrics for final report
         metrics_history = {
@@ -327,85 +333,84 @@ class AdvPromptGuardTrainer:
                 # Train subepoch
                 train_loss = self.train_epoch(subset, optimizer, batch_size, attack_steps)
                 self.logger.info(f"Train Loss: {train_loss:.4f}")
-                
-                # Evaluate on different conditions
-                self.logger.info(f"Evaluating after Subset {subset_idx}/{num_subepochs}")
-                
-                benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
-                train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
-                strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
-        
-                benign_auc = roc_auc_score(benign_labels, benign_soft)
-                train_attack_auc = roc_auc_score(train_labels, train_soft)
-                strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
-                benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
-                train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
-                strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
-                
-                # Log epoch metrics
-                self.logger.info(f"Benign AUC: {benign_auc:.4f}")
-                self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
-                self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
-                
-                self.logger.info(f"projected to next vocab token")
-                self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
-                self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
-                self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
-                
-                gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
-                gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
-                
-                gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)
-                gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
-                gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)
-                self.logger.info(f"GCG ({len(test_dataset_gcg)} samples)")         
-                self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
-                self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
-                self.logger.info(f"benign AUC GCG subset: {gcg_benign_auc:.4f}")
-        
-                
-                # Store metrics
-                metrics_history['epoch'].append(dset_epoch + subset_idx/num_subepochs)
                 metrics_history['train_loss'].append(train_loss)
-                metrics_history['benign_auc'].append(benign_auc)
-                metrics_history['train_attack_auc'].append(train_attack_auc)
-                metrics_history['strong_attack_auc'].append(strong_attack_auc)
-                metrics_history['train_attack_hard_auc'].append(train_attack_hard_auc)
-                metrics_history['strong_attack_hard_auc'].append(strong_attack_hard_auc)
+                
+                #  Evaluate on different conditions
+                if eval_config['run_benign']:
+                    benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+                
+                    benign_auc = roc_auc_score(benign_labels, benign_soft)
+                    benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
+                
+                    self.logger.info(f"Benign AUC: {benign_auc:.4f}")
+                    self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
+                    metrics_history['benign_auc'].append(benign_auc)
+                if eval_config['run_train_attack']:
+                    train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+                
+                    train_attack_auc = roc_auc_score(train_labels, train_soft)
+                    train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
+                
+                    self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
+                    self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
+                    metrics_history['train_attack_auc'].append(train_attack_auc)
+                    metrics_history['train_attack_hard_auc'].append(train_attack_hard_auc)
+                if eval_config['run_strong_attack']:
+                    strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+                
+                    strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
+                    strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
+                
+                    self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
+                    self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
+                    metrics_history['strong_attack_auc'].append(strong_attack_auc)
+                    metrics_history['strong_attack_hard_auc'].append(strong_attack_hard_auc)
+                if eval_config['run_gcg']:
+                    gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
+                    gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
+                
+                    gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)
+                    gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
+                    gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)
+                    
+                    self.logger.info(f"GCG ({len(test_dataset_gcg)} samples)")         
+                    self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
+                    self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
+                    self.logger.info(f"benign AUC GCG subset: {gcg_benign_auc:.4f}")
+                
         
         # Final comprehensive evaluation
         self.logger.info("\nFinal Evaluation:")
-        benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
-        train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
-        strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
-
-        benign_auc = roc_auc_score(benign_labels, benign_soft)
-        train_attack_auc = roc_auc_score(train_labels, train_soft)
-        strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
-        benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
-        train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
-        strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
+        # Evaluate on different conditions
+        if eval_config['run_benign']:
+            benign_soft, benign_hard, benign_labels, _, _  = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=0)
+            benign_auc = roc_auc_score(benign_labels, benign_soft)
+            benign_hard_auc = roc_auc_score(benign_labels, benign_hard)
+            self.logger.info(f"Benign AUC: {benign_auc:.4f}")
+            self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
+        if eval_config['run_train_attack']:
+            train_soft, train_hard, train_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps)
+            train_attack_auc = roc_auc_score(train_labels, train_soft)
+            train_attack_hard_auc = roc_auc_score(train_labels, train_hard)
+            self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
+            self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
+        if eval_config['run_strong_attack']:
+            strong_soft, strong_hard, strong_labels, _, _ = self.evaluate(test_dataset, batch_size, self.attack, attack_steps=attack_steps*2)
+            strong_attack_auc = roc_auc_score(strong_labels, strong_soft)
+            strong_attack_hard_auc = roc_auc_score(strong_labels, strong_hard)
+            self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
+            self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
+        if eval_config['run_gcg']:
+            gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
+            gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
         
-        # Log epoch metrics
-        self.logger.info("\nFinal Performance:")
-        self.logger.info(f"Benign AUC: {benign_auc:.4f}")
-        self.logger.info(f"Training Attack AUC: {train_attack_auc:.4f}")
-        self.logger.info(f"Strong Attack AUC: {strong_attack_auc:.4f}")
-        
-        self.logger.info(f"Benign AUC (hard): {benign_hard_auc:.4f}")
-        self.logger.info(f"Training Attack AUC (hard): {train_attack_hard_auc:.4f}")
-        self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
-        
-        gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.gcg_attack, attack_steps=100)
-        gcg_benign_soft, _, gcg_benign_labels, _, _ = self.evaluate(test_dataset_gcg, batch_size, self.attack, attack_steps=0)
-        
-        gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)
-        gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
-        gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)
-        self.logger.info(f"GCG ({len(test_dataset_gcg)} samples, {sum(gcg_benign_labels)/len(gcg_benign_labels  )} attacked.)")         
-        self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
-        self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
-        self.logger.info(f"benign AUC GCG subset: {gcg_benign_auc:.4f}")
+            gcg_benign_auc = roc_auc_score(gcg_benign_labels, gcg_benign_soft)
+            gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
+            gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)
+            self.logger.info(f"GCG ({len(test_dataset_gcg)} samples)")         
+            self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
+            self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
+            self.logger.info(f"benign AUC GCG subset: {gcg_benign_auc:.4f}")
         
         # Log metrics summary
         self.logger.info("\nTraining Summary:")

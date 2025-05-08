@@ -188,37 +188,7 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
 
 
 
-class MultiStepAttackStrategy(SoftTokenAttack):
-    def __init__(self, model, tokenizer, device, **kwargs):
-        super().__init__(model, tokenizer, device)
-        self.R = self._compute_radius()
-        
-    def _compute_radius(self):
-        pairwise_dist = torch.cdist(self.hard_tokens, self.hard_tokens, p=2)
-        return pairwise_dist.max() / 1.9
-        
-    def compute_perturbation(self, grad, probs, step):
-        if step < 8:
-            return 0.1 * grad + 0.01 * grad.sign()
-        elif step < 16:
-            return 0.1 * grad + 0.01 * grad.sign() - 0.05 * (self.current_emb - self.raw_emb)
-        else:
-            return 0.1 * grad
-        
-    def apply_projection(self, adv_emb, raw_emb, pos_indices, token_positions, step):
-        if step >= 8:
-            with torch.no_grad():
-                for i, pos in enumerate(token_positions):
-                    idx = pos_indices[i]
-                    current_emb = adv_emb[idx, pos]
-                    dists = torch.norm(current_emb - self.hard_tokens, dim=1)
-                    v0 = torch.argmin(dists)
-                    if dists[v0] > self.R:
-                        direction = self.hard_tokens[v0] - current_emb
-                        adv_emb[idx, pos] += direction * (dists[v0] - self.R)/dists[v0]
-        return adv_emb
-    
-    
+
 class GCG(SoftTokenAttack):
     def __init__(self, model, tokenizer, device, **kwargs):
         super().__init__(model, tokenizer, device)

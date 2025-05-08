@@ -6,6 +6,12 @@ training:
   attack_steps: 20
   random_steps_per_batch: true
 
+evaluation:
+  run_benign: false
+  run_train_attack: false
+  run_strong_attack: false
+  run_gcg: true
+
 model:
   name: meta-llama/Prompt-Guard-86M
   device: cuda  # auto-detection still occurs, but this overrides

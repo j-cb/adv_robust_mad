@@ -235,23 +235,27 @@ class GCG(SoftTokenAttack):
             
             adv_emb = modified_emb.clone().detach().requires_grad_(True)
 
-            with torch.no_grad():
-                batch_size, seq_len, emb_dim = adv_emb.shape
-                flat_emb = adv_emb.view(-1, emb_dim)
-                distances = torch.cdist(flat_emb, self.hard_tokens, p=2)
-                closest_ids = torch.argmin(distances, dim=-1).view(batch_size, seq_len)
-                
-                # Decode and print
+        with torch.no_grad():
+            batch_size, seq_len, emb_dim = adv_emb.shape
+            flat_emb = adv_emb.view(-1, emb_dim)
+            distances = torch.cdist(flat_emb, self.hard_tokens, p=2)
+            closest_ids = torch.argmin(distances, dim=-1).view(batch_size, seq_len)
+            
+            # Decode and print
+            #decoded_texts = self.tokenizer.batch_decode(closest_ids)
+            #print(f"\nStep {step} Projected Texts:")
+            #for idx, text in enumerate(decoded_texts):
+            #    print(f"Sample {idx}: {text}")
+            
+            # Verify embeddings match hard tokens
+            projected_emb = self.hard_tokens[closest_ids]
+            diff = (adv_emb - projected_emb).abs().max().item()
+            if diff > 0.0001:
                 decoded_texts = self.tokenizer.batch_decode(closest_ids)
                 print(f"\nStep {step} Projected Texts:")
                 for idx, text in enumerate(decoded_texts):
                     print(f"Sample {idx}: {text}")
-                
-                # Verify embeddings match hard tokens
-                projected_emb = self.hard_tokens[closest_ids]
-                diff = (adv_emb - projected_emb).abs().max().item()
-                print(f"Max Embedding Deviation: {diff:.6f} (Should be 0.0)")
-            
+                raise ValueError(f'Not a hard token. Max Embedding Deviation: {diff:.6f} (Should be 0.0)')
             
         return adv_emb, attention_mask
     

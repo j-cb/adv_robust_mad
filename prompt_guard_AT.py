@@ -207,7 +207,10 @@ class AdvPromptGuardTrainer:
                     
                     # Update input_ids_hard
                     input_ids_hard[idx, pos] = closest_token_id
-            assert final_emb == self.model.deberta.embeddings.word_embeddings(input_ids_hard)
+            diff = (self.model.deberta.embeddings.word_embeddings(input_ids_hard) - final_emb).abs().max().item()
+            if diff > 0.0001:
+                raise ValueError(f'GCG not producing hard tokens correctly. Max Embedding Deviation: {diff:.6f} (Should be 0.0)')
+            
             self.logger.info(f"GCG final_emb == input_ids_hard confimed.")
             
         else:

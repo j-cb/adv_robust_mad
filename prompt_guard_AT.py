@@ -207,7 +207,7 @@ class AdvPromptGuardTrainer:
                     
                     # Update input_ids_hard
                     input_ids_hard[idx, pos] = closest_token_id
-            assert final_emb == input_ids_hard
+            assert final_emb == self.model.deberta.embeddings.word_embeddings(input_ids_hard)
             self.logger.info(f"GCG final_emb == input_ids_hard confimed.")
             
         else:

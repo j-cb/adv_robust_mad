@@ -286,9 +286,11 @@ class AdvPromptGuardTrainer:
         self.logger.info(f"Strong Attack AUC (hard): {strong_attack_hard_auc:.4f}")
         
         gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset, batch_size, self.gcg_attack, attack_steps=100)
-                
-        self.logger.info(f"GCG AUC: {gcg_soft:.4f}")        
-        self.logger.info(f"GCG AUC (hard ==): {gcg_hard:.4f}")
+        
+        gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
+        gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)         
+        self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
+        self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
         
         # Store metrics for final report
         metrics_history = {
@@ -346,8 +348,11 @@ class AdvPromptGuardTrainer:
                 
                 gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset, batch_size, self.gcg_attack, attack_steps=100)
                 
-                self.logger.info(f"GCG AUC: {gcg_soft:.4f}")        
-                self.logger.info(f"GCG AUC (hard ==): {gcg_hard:.4f}")
+                gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
+                gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)         
+                self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
+                self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
+        
                 
                 # Store metrics
                 metrics_history['epoch'].append(dset_epoch + subset_idx/num_subepochs)
@@ -383,8 +388,11 @@ class AdvPromptGuardTrainer:
         
         gcg_soft, gcg_hard, gcg_labels, _, _ = self.evaluate(test_dataset, batch_size, self.gcg_attack, attack_steps=100)
         
-        self.logger.info(f"GCG AUC: {gcg_soft:.4f}")        
-        self.logger.info(f"GCG AUC (hard ==): {gcg_hard:.4f}")
+        gcg_soft_auc = roc_auc_score(gcg_labels, gcg_soft)
+        gcg_hard_auc = roc_auc_score(gcg_labels, gcg_hard)         
+        self.logger.info(f"GCG AUC: {gcg_soft_auc:.4f}")        
+        self.logger.info(f"GCG AUC (hard ==): {gcg_hard_auc:.4f}")
+        
         
         # Log metrics summary
         self.logger.info("\nTraining Summary:")

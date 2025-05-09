@@ -7,9 +7,9 @@ training:
   random_steps_per_batch: true
 
 evaluation:
-  run_benign: false
-  run_train_attack: false
-  run_strong_attack: false
+  run_benign: true
+  run_train_attack: true
+  run_strong_attack: true
   run_gcg: true
 
 model:

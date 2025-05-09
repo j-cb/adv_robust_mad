@@ -194,22 +194,37 @@ class GCG(SoftTokenAttack):
         super().__init__(model, tokenizer, device)
 
     
-    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices, attack_steps=100, token_possible_positions=range(10), topk=32):
+    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices, attack_steps=100, token_possible_positions=range(10), topk=64):
+        
+        #attacked_indices = attacked_indices[:1]
         adv_emb = raw_emb.clone().detach().requires_grad_(True)
+        successful_attack = []
         
         for step in range(attack_steps):
             if adv_emb.grad is not None:
                 adv_emb.grad.zero_()
+
+            if len(successful_attack) == len(attacked_indices):
+                print(f'GCG successful for all {attacked_indices} batch samples after {step} steps.')
+                break
             
             # Forward pass still on all samples
             norm_emb = self.model.deberta.embeddings.LayerNorm(adv_emb)
             outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
             logits = self.model.classifier(self.model.pooler(outputs))
             probs = torch.softmax(logits, dim=-1)
-            
+
+            #print(f'before step {step:02d}. probs benign on adv: {probs[attacked_indices[0], 0].mean().item():.4f}')
+
             # Maximize benign class (0) probability for jailbreak examples
             loss = -torch.log(probs[attacked_indices, 0]).mean()
             loss.backward()
+
+            if step == 0:
+                max_benign_prob = probs[:, 0].max()
+                target_prob = max_benign_prob #max_benign_prob + (1-max_benign_prob)/2
+                print(f'Target prob: {target_prob}')
+                
             
             # adv_emb: B, T, E
             # word_embeddings.weight: V, E
@@ -220,6 +235,11 @@ class GCG(SoftTokenAttack):
             
             modified_emb = adv_emb.clone().detach().requires_grad_(False)
             for j in attacked_indices:
+                if probs[j, 0] > target_prob:
+                    if j not in successful_attack:
+                        successful_attack.append(j)
+                        print(f'Successfully attacked batch sample {j} after {step} steps ({len(successful_attack)}/{len(attacked_indices)}).')
+                    continue
                 candidates = [adv_emb[j].clone()]
                 for b in range(raw_emb.shape[0]-1): #same batch size as outside for forward pass
                     replaced_pos = token_possible_positions[torch.randint(len(token_possible_positions), (1,))[0]]
@@ -232,9 +252,17 @@ class GCG(SoftTokenAttack):
                 candidates = torch.stack(candidates)
                 attention_mask_candidates = torch.stack(len(candidates)*[attention_mask[j]])
                 modified_emb[j] = self.best_candidate(candidates, attention_mask_candidates)
-            
+                
             adv_emb = modified_emb.clone().detach().requires_grad_(True)
-            print(f'step {step:02d}. probs benign on adv: {probs[attacked_indices, 0].mean().item():.4f}')
+            #with torch.no_grad():
+            #        norm_emb = self.model.deberta.embeddings.LayerNorm(adv_emb)
+            #        outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
+            #        logits = self.model.classifier(self.model.pooler(outputs))
+            #        probs = torch.softmax(logits, dim=-1)
+            #print(f'after step {step:02d}. probs benign on adv: {probs[attacked_indices[0], 0].mean().item():.4f}')
+
+        
+        print(f'GCG fully successful for {len(successful_attack)}/{len(attacked_indices)} batch samples after {step} steps.')
 
         with torch.no_grad():
             batch_size, seq_len, emb_dim = adv_emb.shape
@@ -263,9 +291,11 @@ class GCG(SoftTokenAttack):
     def best_candidate(self, candidate_embs, attention_mask):
         """Evaluate candidate replacements for one sequence and return best. I.e. batch dim not the same thing as elsewhere."""
         with torch.no_grad():
-            outputs = self.model.deberta.encoder(candidate_embs, attention_mask)[0]
+            norm_emb = self.model.deberta.embeddings.LayerNorm(candidate_embs)
+            outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
             logits = self.model.classifier(self.model.pooler(outputs))
             probs = torch.softmax(logits, dim=-1)
-            
-        return candidate_embs[torch.argmax(probs[:,0])]
+        top_candidate = torch.argmax(probs[:,0])
+        #print(f'probs benign best candidate: {probs[top_candidate,0].item():.4f}')
+        return candidate_embs[top_candidate]
     

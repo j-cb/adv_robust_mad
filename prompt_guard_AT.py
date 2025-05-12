@@ -435,8 +435,8 @@ class AdvPromptGuardTrainer:
         
         # Log metrics summary
         self.logger.info("\nTraining Summary:")
-        df_metrics = pandas.DataFrame(metrics_history)
-        self.logger.info("\nMetrics History:\n" + str(df_metrics))
+        #df_metrics = pandas.DataFrame(metrics_history)
+        #self.logger.info("\nMetrics History:\n" + str(df_metrics))
         
         # Return metrics for potential further analysis
         return metrics_history

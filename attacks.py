@@ -194,7 +194,7 @@ class GCG(SoftTokenAttack):
         super().__init__(model, tokenizer, device)
 
     
-    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices, attack_steps=100, token_possible_positions=range(10), topk=64):
+    def __call__(self, raw_emb, attention_mask, token_positions, attacked_indices, attack_steps=200, token_possible_positions=range(10), topk=128):
         
         #attacked_indices = attacked_indices[:1]
         adv_emb = raw_emb.clone().detach().requires_grad_(True)

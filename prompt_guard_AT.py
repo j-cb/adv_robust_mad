@@ -358,7 +358,7 @@ class AdvPromptGuardTrainer:
                 
                 # Train subepoch
                 if train_undefended:
-                    self.train_epoch(subset, optimizer, batch_size, 0)
+                    train_loss = self.train_epoch(subset, optimizer, batch_size, 0)
                 else:
                     train_loss = self.train_epoch(subset, optimizer, batch_size, attack_steps)
                 self.logger.info(f"Train Loss: {train_loss:.4f}")

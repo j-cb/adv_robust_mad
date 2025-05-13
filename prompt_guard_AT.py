@@ -268,7 +268,7 @@ class AdvPromptGuardTrainer:
         return avg_loss
     
     def adversarial_train(self, train_dataset, test_dataset, epochs=5, lr=5e-5,
-                         batch_size=16, attack_steps=20):
+                         batch_size=16, attack_steps=20, train_undefended=False):
         """Full adversarial training loop with comprehensive evaluation"""
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         test_dataset_gcg = test_dataset.select(range(2*batch_size))
@@ -288,6 +288,10 @@ class AdvPromptGuardTrainer:
         self.logger.info(f"Batch size: {batch_size}")
         self.logger.info(f"Learning rate: {lr}")
         self.logger.info(f"Attack steps: {attack_steps}")
+        if train_undefended:
+            self.logger.info(f"Attack steps training: {0}")
+        else:
+            self.logger.info(f"Attack steps training: {attack_steps}")
         self.logger.info("="*50 + "\n")
         
         # Initial evaluation
@@ -349,10 +353,12 @@ class AdvPromptGuardTrainer:
             
             for subset_idx, subset in enumerate(subsets):
                 self.logger.info(f"\nTraining Subset {subset_idx}/{num_subepochs}")
-            
                 
                 # Train subepoch
-                train_loss = self.train_epoch(subset, optimizer, batch_size, attack_steps)
+                if train_undefended:
+                    self.train_epoch(subset, optimizer, batch_size, 0)
+                else:
+                    train_loss = self.train_epoch(subset, optimizer, batch_size, attack_steps)
                 self.logger.info(f"Train Loss: {train_loss:.4f}")
                 metrics_history['train_loss'].append(train_loss)
                 
@@ -530,6 +536,7 @@ if __name__ == "__main__":
         lr=config['training']['lr'],
         batch_size=config['training']['batch_size'],
         attack_steps=config['attack'].get('attack_steps', 20),
+        train_undefended=config['training']['train_undefended'],
     )
 
     from saving_utils import save_model_and_data, upload_to_hf_hub

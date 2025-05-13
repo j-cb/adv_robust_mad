@@ -5,6 +5,7 @@ training:
   batch_size: 16
   attack_steps: 20
   random_steps_per_batch: true
+  train_undefended: false
 
 evaluation:
   run_benign: true

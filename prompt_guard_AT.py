@@ -243,9 +243,11 @@ class AdvPromptGuardTrainer:
             batch_labels = labels[i:i+batch_size]
             
             # Generate adversarial embeddings
-            if random_steps_per_batch:
+            if random_steps_per_batch and attack_steps > 0:
                 # roughly 20% no attack, 20% full steps, rest in between.
                 num_steps = np.clip(np.random.randint(low=-attack_steps//3, high=attack_steps+attack_steps//3), 0, attack_steps)
+            else:
+                num_steps = attack_steps
             adv_emb, attention_mask, adv_hard = self.generate_adversarial_batch(
                 batch_texts, batch_labels, self.attack, num_steps
             )

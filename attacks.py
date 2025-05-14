@@ -186,7 +186,27 @@ class OneTokenGlobalL2(OneTokenBenignGradAttack):
         #print(f'{step:02d} {probs[:,2].mean().item():.4f},  {torch.norm(adv_emb-raw_emb).mean().item():.4f}, {self.R:.4f}')
         return adv_emb
 
-
+class OneTokenUnrestricted(OneTokenBenignGradAttack):
+    def __init__(self, model, tokenizer, device, lr_l2=0.08, lr_linf=0.006, step_size_decay=0.94, **kwargs):
+        super().__init__(model, tokenizer, device)
+        
+        self.lr_l2 = lr_l2
+        self.lr_linf = lr_linf
+        self.step_size_decay = step_size_decay
+    
+    def compute_perturbation(self, adv_emb, raw_emb, loss, probs, step, total_steps, attacked_indices, token_positions):
+        assert adv_emb.grad is not None
+        with torch.no_grad():
+            for i, pos in enumerate(token_positions): #could be parallelized, but should not take much time anyway
+                idx = attacked_indices[i]
+                grad = adv_emb.grad[idx, pos]
+                perturbation = (
+                    -grad * self.lr_l2 # L2++
+                    -grad.sign() * self.lr_linf * probs[idx, 2].item()  # Linf
+                )
+                adv_emb[idx, pos] += (self.step_size_decay**step) * perturbation
+        return adv_emb
+        
 
 
 class GCG(SoftTokenAttack):

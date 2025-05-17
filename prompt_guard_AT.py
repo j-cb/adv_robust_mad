@@ -254,7 +254,8 @@ class AdvPromptGuardTrainer:
             
             # Forward pass with aligned labels
             optimizer.zero_grad()
-            outputs = self.model.deberta.encoder(adv_emb, attention_mask)[0]
+            norm_emb = self.model.deberta.embeddings.LayerNorm(adv_emb)
+            outputs = self.model.deberta.encoder(norm_emb, attention_mask)[0]
             logits = self.model.classifier(self.model.pooler(outputs))
             loss = torch.nn.functional.cross_entropy(
                 logits, 
